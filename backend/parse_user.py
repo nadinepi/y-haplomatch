@@ -5,7 +5,7 @@ import sqlite3
 
 
 def _split_row(raw_line):
-    # Split a line by comma, tab, or whitespace
+    # split a line by comma, tab, or whitespace
     raw = raw_line.strip()
     if not raw:
         return []
@@ -19,7 +19,7 @@ def _split_row(raw_line):
 
 
 def parse_user_file(file_content, db_path):
-    # Parse a user genotype file and return a dict of SNPs
+    # parse a user genotype file and return a dict of SNPs
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
     cur.execute("SELECT snp_name, position, ref_allele, alt_allele FROM snp_reference")
@@ -27,14 +27,17 @@ def parse_user_file(file_content, db_path):
     ref_by_pos = {}
     ref_by_name = {}
     for name, pos, ref, alt in cur:
-        ref_by_pos[str(pos)] = (name, ref)
+        key_pos = str(pos)
+        ref_by_pos.setdefault(key_pos, []).append((name, ref, alt))
         ref_by_name[name.upper()] = (name, ref, alt)
     conn.close()
 
-    # Acceptable Y chromosome labels
-    y_labels = {'24', 'Y', 'CHRY', 'CHR Y', 'CHR Y', 'Y_CHR', 'YCHR', 'Y-CHR', 'CHR Y', 'CHRY', 'Y', 'chrY', 'y', 'chrY'.lower(), 'chrY'.upper()}
+    # acceptable labels for y chromosome in the chromosome column
+    y_labels = {
+        '24', 'Y', 'CHRY', 'CHR Y', 'Y_CHR', 'YCHR', 'Y-CHR', 'CHR24', 'CHROMOSOMEY'
+    }
 
-    # Try to auto-detect header and column order
+    # trying to auto-detect header and column order
     header = None
     for line in file_content.splitlines():
         if not line.strip() or line.strip().startswith('#'):
@@ -42,12 +45,11 @@ def parse_user_file(file_content, db_path):
         parts = _split_row(line)
         if len(parts) < 4:
             continue
-        # Heuristic: header if any field contains 'chrom' or 'allele' or 'geno' or 'pos'
         if any(any(x in p.lower() for x in ['chrom', 'allele', 'geno', 'pos', 'snp', 'rsid', 'name']) for p in parts):
             header = [p.strip().lower() for p in parts]
             break
 
-    # Default column indices
+    # default column indices
     idx_rsid = 0
     idx_chrom = 1
     idx_pos = 2
@@ -56,7 +58,7 @@ def parse_user_file(file_content, db_path):
     idx_genotype = 3
 
     if header:
-        # Try to find columns by name
+        # try to find columns by name
         for i, col in enumerate(header):
             if 'chrom' in col:
                 idx_chrom = i
@@ -72,6 +74,7 @@ def parse_user_file(file_content, db_path):
                 idx_rsid = i
 
     result = {}
+    parsed_snps = []
     for line in file_content.splitlines():
         if not line.strip() or line.strip().startswith('#'):
             continue
@@ -81,20 +84,20 @@ def parse_user_file(file_content, db_path):
         if len(parts) < 4:
             continue
 
-        # Get chromosome label
+        # get chromosome label
         chrom = parts[idx_chrom].strip().upper() if len(parts) > idx_chrom else ''
         # Accept more Y chromosome labels
         if chrom not in y_labels:
             continue
 
-        # Get position
+        # get position
         pos = parts[idx_pos].strip() if len(parts) > idx_pos else ''
         try:
             int(pos)
         except Exception:
             continue
 
-        # Try to get alleles or genotype
+        # try to get alleles or genotype
         allele1 = allele2 = None
         if len(parts) > idx_allele2 and parts[idx_allele1] and parts[idx_allele2]:
             allele1 = parts[idx_allele1].strip().upper()
@@ -108,17 +111,17 @@ def parse_user_file(file_content, db_path):
         if not allele1:
             continue
 
-        # Try to match by position or rsid
-        if pos not in ref_by_pos:
-            rsid = parts[idx_rsid].strip().upper() if len(parts) > idx_rsid else ''
-            if rsid not in ref_by_name:
-                continue
+        # try to match by rsID first so we preserve identifier identity
+        rsid = parts[idx_rsid].strip().upper() if len(parts) > idx_rsid else ''
+        if rsid and rsid in ref_by_name:
             snp_name, ref_allele, alt_allele = ref_by_name[rsid]
+            parsed_snps.append((rsid, pos, 'RSID_MATCH'))
+        elif pos in ref_by_pos:
+            snp_name, ref_allele, alt_allele = ref_by_pos[pos][0]
+            parsed_snps.append((snp_name, pos, 'POS_MATCH'))
         else:
-            snp_name, ref_allele, alt_allele = ref_by_name.get(
-                ref_by_pos[pos][0].upper(),
-                (ref_by_pos[pos][0], ref_by_pos[pos][1], None),
-            )
+            parsed_snps.append((rsid, pos, 'NO_MATCH'))
+            continue
 
         ref_allele = (ref_allele or '').upper()
         alt_allele = (alt_allele or '').upper()
