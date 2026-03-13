@@ -1,16 +1,12 @@
-#!/usr/bin/env python3
-#
-# Merge plink-extracted Y chromosome genotypes with AADR annotations
-# and store everything in a SQLite database.
-# Run extract_y.sh first to get the .raw file.
-#
 import sqlite3
 import os
 import re
 import csv
 import openpyxl
+
+
 def is_invalid_haplo(h):
-    """Return True if haplogroup value is missing or uninformative (AADR style)."""
+    # check if haplogroup value is missing or uninformative
     if h is None:
         return True
     h = re.sub(r'\s+', ' ', str(h).strip().lower())
@@ -29,18 +25,62 @@ RAW_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'plink_out', 'aadr_chrY.raw')
 ANNO_FILE = os.path.join(SCRIPT_DIR, '..', 'ProjetcFiles', 'AADR_54.1', 'AADR Annotations 2025.csv')
 DB_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'ydna.db')
 LOCUS_FILE = os.path.join(SCRIPT_DIR, '..', 'ProjetcFiles', 'AncientYDNA', 'chrY_locusFile_b37_isogg2016.txt')
+SNP_FILE = os.path.join(SCRIPT_DIR, '..', 'ProjetcFiles', 'AncientYDNA', 'snpFile_b37_isogg2019.txt')
 ANCIENT_FILE = os.path.join(SCRIPT_DIR, '..', 'ProjetcFiles', 'AADR_54.1', 'Ancient_samples.txt')
+
+SNP24_POSITION_RE = re.compile(r'^snp_24_(\d+)(?:_|$)', re.IGNORECASE)
+
+
+def normalize_plink_marker_name(snp_name):
+    """Strip PLINK assay suffix from a marker name."""
+    if snp_name.lower().startswith('snp_24_'):
+        pos = extract_position_from_marker(snp_name)
+        if pos is not None:
+            return f'snp_24_{pos}'
+
+    if '_' in snp_name:
+        head, tail = snp_name.rsplit('_', 1)
+        if tail.isdigit():
+            return head
+
+    return snp_name
+
+
+def extract_position_from_marker(marker_name):
+    """Extract Y-position from markers like snp_24_6823215_1 or snp_24_6823215_A_G."""
+    m = SNP24_POSITION_RE.match(marker_name)
+    if m:
+        return int(m.group(1))
+    return None
 
 
 
 def load_snp_reference():
-    """Load SNP reference from snpFile_b37_isogg2019.txt.
+    """Load SNP reference from ISOGG files.
     Returns:
         snp_to_haplo: dict  snp_name -> ISOGG haplogroup
         snp_rows: list of (snp_name, position, ref_allele, haplogroup, alt_allele)
     """
     snp_to_haplo = {}
     snp_rows = []
+
+    def add_snp_row(snp_name, position, ref_allele, isogg_haplo, alt_allele):
+        if not snp_name or not position or not str(position).isdigit() or not isogg_haplo:
+            return
+        snp_name = str(snp_name).strip()
+        if not snp_name:
+            return
+        position = int(position)
+        ref_allele = str(ref_allele).strip().upper() if ref_allele else None
+        alt_allele = str(alt_allele).strip().upper() if alt_allele else None
+        isogg_haplo = str(isogg_haplo).strip()
+
+        key = snp_name.upper()
+        if key in snp_to_haplo:
+            return
+        snp_to_haplo[key] = isogg_haplo
+        snp_rows.append((snp_name, position, ref_allele, isogg_haplo, alt_allele))
+
     with open(LOCUS_FILE) as f:
         for line in f:
             if not line.strip() or line.startswith('#') or line.startswith('locName'):
@@ -53,14 +93,21 @@ def load_snp_reference():
             ref_allele = row[2].strip()
             isogg_haplo = row[3].strip()
             alt_allele = row[4].strip()
+            add_snp_row(snp_name, position, ref_allele, isogg_haplo, alt_allele)
 
-            if not position.isdigit():
+    with open(SNP_FILE) as f:
+        for line in f:
+            if not line.strip() or line.startswith('#') or line.startswith('locName'):
                 continue
-            if not isogg_haplo:
+            row = line.strip().split('\t')
+            if len(row) < 5:
                 continue
-            if snp_name not in snp_to_haplo:
-                snp_to_haplo[snp_name] = isogg_haplo
-                snp_rows.append((snp_name, int(position), ref_allele, isogg_haplo, alt_allele))
+            snp_name = row[0].strip()
+            position = row[1].strip()
+            ref_allele = row[2].strip()
+            isogg_haplo = row[3].strip()
+            alt_allele = row[4].strip()
+            add_snp_row(snp_name, position, ref_allele, isogg_haplo, alt_allele)
 
     return snp_to_haplo, snp_rows
 
@@ -223,7 +270,9 @@ def create_db(db_path):
     cur.execute('''CREATE TABLE genotypes (
         individual_id TEXT,
         snp_name TEXT,
+        position INTEGER,
         value INTEGER,
+        is_derived INTEGER,
         PRIMARY KEY (individual_id, snp_name)
     )''')
 
@@ -243,8 +292,10 @@ def create_db(db_path):
     # for fast lookups
     cur.execute('CREATE INDEX idx_geno_ind ON genotypes(individual_id)')
     cur.execute('CREATE INDEX idx_geno_snp ON genotypes(snp_name)')
+    cur.execute('CREATE INDEX idx_geno_pos ON genotypes(position)')
     cur.execute('CREATE INDEX idx_ind_haplo ON individuals(y_haplogroup_clean)')
     cur.execute('CREATE INDEX idx_snpref_haplo ON snp_reference(haplogroup)')
+    cur.execute('CREATE INDEX idx_snp_pos ON snp_reference(position)')
 
     conn.commit()
     return conn
@@ -255,6 +306,7 @@ def main():
     print("Loading SNP reference from locusFile...")
     snp_to_haplo, snp_rows = load_snp_reference()
     print(f"  {len(snp_to_haplo)} SNP->haplogroup mappings")
+    ref_pos_by_name = {row[0].upper(): row[1] for row in snp_rows}
 
     print("Loading haplogroup tree from file...")
     TREE_FILE = os.path.join(SCRIPT_DIR, '..', 'ProjetcFiles', 'AncientYDNA', 'chrY_hGrpTree_isogg2016.txt')
@@ -284,15 +336,13 @@ def main():
 
         # Build set of ISOGG-relevant SNP base names for filtering
         isogg_snp_names = set(snp_to_haplo.keys())
+        isogg_positions = {row[1] for row in snp_rows}
         # Map column index -> True if this SNP is ISOGG-relevant
         snp_is_relevant = []
         for sn in snp_names:
-            # Strip PLINK _N suffix: 'CTS1595_4' -> 'CTS1595'
-            if sn.startswith('snp_24_'):
-                base = '_'.join(sn.split('_')[:-1])
-            else:
-                base = sn.rsplit('_', 1)[0]
-            snp_is_relevant.append(base in isogg_snp_names)
+            base = normalize_plink_marker_name(sn)
+            pos = extract_position_from_marker(base)
+            snp_is_relevant.append(base.upper() in isogg_snp_names or pos in isogg_positions)
 
         n_relevant = sum(snp_is_relevant)
         print(f"  {len(snp_names)} Y-SNPs total, {n_relevant} ISOGG-relevant (kept)")
@@ -345,7 +395,13 @@ def main():
             geno_rows = []
             for snp_name, val, relevant in zip(snp_names, row[6:], snp_is_relevant):
                 if relevant and val != 'NA':
-                    geno_rows.append((iid, snp_name, int(val)))
+                    geno_val = int(val)
+                    base_name = normalize_plink_marker_name(snp_name)
+                    position = extract_position_from_marker(base_name)
+                    if position is None:
+                        position = ref_pos_by_name.get(base_name.upper())
+                    is_derived = 1 if geno_val == 2 else 0
+                    geno_rows.append((iid, snp_name, position, geno_val, is_derived))
 
             if not geno_rows:
                 skipped += 1
@@ -383,7 +439,7 @@ def main():
             )
 
             cur.executemany(
-                'INSERT INTO genotypes VALUES (?,?,?)',
+                'INSERT INTO genotypes VALUES (?,?,?,?,?)',
                 geno_rows
             )
 
