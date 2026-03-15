@@ -2,8 +2,6 @@
 
 A web app for exploring Y-chromosome SNP matches with ancient DNA samples.
 
----
-
 ## Features
 - upload your Y-chromosome genotype file
 - see matches with ancient individuals from the AADR database
