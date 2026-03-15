@@ -136,7 +136,7 @@ def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=
     cur.execute("""
         SELECT id, y_haplogroup, y_haplogroup_clean, y_terminal,
                group_id, locality, country, lat, lon,
-               date_mean, full_date, n_called
+               date_mean, full_date, full_date_range, n_called
         FROM individuals
         WHERE y_haplogroup_clean = ?
            OR y_haplogroup_clean LIKE ?

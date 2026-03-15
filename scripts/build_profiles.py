@@ -246,6 +246,25 @@ def load_annotations():
     return annotations
 
 
+def extract_date_range(full_date):
+    import re
+    if not full_date:
+        return None
+    # Special case: 'present' means 1950 CE
+    if 'present' in full_date.lower():
+        return '1950 CE'
+    # Match things like "8175-7750 calBCE", "2500-1700 BCE", "1450-1800 CE"
+    m = re.search(r'(\d{3,5}-\d{3,5} (?:cal)?(?:BCE|CE))', full_date)
+    if m:
+        return m.group(1).replace('calBCE', 'BCE').replace('calCE', 'CE').replace('cal BCE', 'BCE').replace('cal CE', 'CE')
+    # Match this as well: "300 BCE - 150 CE"
+    m = re.search(r'(\d{3,5} (?:cal)?(?:BCE|CE))\s*-\s*(\d{3,5} (?:cal)?(?:BCE|CE))', full_date)
+    if m:
+        left = m.group(1).replace('calBCE', 'BCE').replace('calCE', 'CE').replace('cal BCE', 'BCE').replace('cal CE', 'CE')
+        right = m.group(2).replace('calBCE', 'BCE').replace('calCE', 'CE').replace('cal BCE', 'BCE').replace('cal CE', 'CE')
+        return f"{left} - {right}"
+    return full_date
+    
 def create_db(db_path):
     if os.path.exists(db_path):
         os.remove(db_path)
@@ -264,6 +283,7 @@ def create_db(db_path):
         lon REAL,
         date_mean REAL,
         full_date TEXT,
+        full_date_range TEXT,
         n_called INTEGER
     )''')
 
@@ -431,11 +451,16 @@ def main():
             if y_clean and y_clean in tree_nodes:
                 norm_matched += 1
 
+
+            # Extract date range from full_date
+            full_date = info.get('full_date')
+            full_date_range = extract_date_range(full_date)
+
             cur.execute(
-                'INSERT INTO individuals VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                'INSERT INTO individuals VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (iid, y_haplo, y_clean, info.get('y_terminal'), info.get('group'),
                  info.get('locality'), info.get('country'),
-                 lat, lon, date_mean, info.get('full_date'), len(geno_rows))
+                 lat, lon, date_mean, full_date, full_date_range, len(geno_rows))
             )
 
             cur.executemany(
