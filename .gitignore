@@ -36,8 +36,8 @@ Thumbs.db
 *.tmp
 
 data/
-ProjetcFiles/*
-!ProjetcFiles/README.txt
+data/*
+!data/placeholder.txt
 
 .env
 .env.*
