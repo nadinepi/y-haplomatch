@@ -19,17 +19,18 @@ def _split_row(raw_line):
 
 
 def parse_user_file(file_content, db_path):
-    # parse a user genotype file and return a dict of SNPs
+    # parse a user genotype file and return 2016 SNP names
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    cur.execute("SELECT snp_name, position, ref_allele, alt_allele FROM snp_reference")
 
-    ref_by_pos = {}
-    ref_by_name = {}
-    for name, pos, ref, alt in cur:
-        key_pos = str(pos)
-        ref_by_pos.setdefault(key_pos, []).append((name, ref, alt))
-        ref_by_name[name.upper()] = (name, ref, alt)
+    cur.execute(
+        "SELECT snp_name, position, ref_allele, alt_allele FROM snp_reference ORDER BY position, snp_name"
+    )
+    snp_by_name = {}
+    snp_by_pos = {}
+    for name, pos, ref, alt in cur.fetchall():
+        snp_by_name[name.upper()] = (name, pos, ref, alt)
+        snp_by_pos.setdefault(str(pos), (name, pos, ref, alt))
     conn.close()
 
     # acceptable labels for y chromosome in the chromosome column
@@ -37,7 +38,7 @@ def parse_user_file(file_content, db_path):
         '24', 'Y', 'CHRY', 'CHR Y', 'Y_CHR', 'YCHR', 'Y-CHR', 'CHR24', 'CHROMOSOMEY'
     }
 
-    # trying to auto-detect header and column order
+    # try to auto-detect the header
     header = None
     for line in file_content.splitlines():
         if not line.strip() or line.strip().startswith('#'):
@@ -74,7 +75,7 @@ def parse_user_file(file_content, db_path):
                 idx_rsid = i
 
     result = {}
-    parsed_snps = []
+    display_labels = {}
     log_lines = []
     for line in file_content.splitlines():
         if not line.strip() or line.strip().startswith('#'):
@@ -87,7 +88,6 @@ def parse_user_file(file_content, db_path):
 
         # get chromosome label
         chrom = parts[idx_chrom].strip().upper() if len(parts) > idx_chrom else ''
-        # Accept more Y chromosome labels
         if chrom not in y_labels:
             continue
 
@@ -98,7 +98,7 @@ def parse_user_file(file_content, db_path):
         except Exception:
             continue
 
-        # try to get alleles or genotype
+        # get alleles or genotype
         allele1 = allele2 = None
         if len(parts) > idx_allele2 and parts[idx_allele1] and parts[idx_allele2]:
             allele1 = parts[idx_allele1].strip().upper()
@@ -112,37 +112,50 @@ def parse_user_file(file_content, db_path):
         if not allele1:
             continue
 
-        # try to match by rsID first so we preserve identifier identity
+        # match by 2016 SNP name first, then by position
         rsid = parts[idx_rsid].strip().upper() if len(parts) > idx_rsid else ''
-        if rsid and rsid in ref_by_name:
-            snp_name, ref_allele, alt_allele = ref_by_name[rsid]
-            parsed_snps.append((rsid, pos, 'RSID_MATCH'))
-        elif pos in ref_by_pos:
-            snp_name, ref_allele, alt_allele = ref_by_pos[pos][0]
-            parsed_snps.append((snp_name, pos, 'POS_MATCH'))
+        match_kind = None
+        snp_info = None
+
+        if rsid and rsid in snp_by_name:
+            snp_info = snp_by_name[rsid]
+            match_kind = 'DIRECT_2016_NAME'
+        elif pos in snp_by_pos:
+            snp_info = snp_by_pos[pos]
+            match_kind = 'POS_MATCH_2016'
         else:
-            parsed_snps.append((rsid, pos, 'NO_MATCH'))
+            log_lines.append(f"User SNP {rsid or pos}: no 2016 match in SNP table")
             continue
 
+        snp_name, _, ref_allele, alt_allele = snp_info
         ref_allele = (ref_allele or '').upper()
         alt_allele = (alt_allele or '').upper()
 
-        # Y is haploid, just use allele1
+        # Y is haploid, so just use the first allele
         allele = allele1
         if allele in ('', '-', '--', '0', 'N'):
             continue
+
         if allele == ref_allele:
             result[snp_name] = 0
-            log_lines.append(f"User SNP {snp_name}: allele={allele}, ref={ref_allele}, alt={alt_allele}, result=0 (ancestral)")
+            display_labels[snp_name] = rsid if rsid else snp_name
+            log_lines.append(
+                f"User SNP {snp_name}: match={match_kind}, allele={allele}, ref={ref_allele}, alt={alt_allele}, result=0 (ancestral)"
+            )
         elif allele == alt_allele:
             result[snp_name] = 2
-            log_lines.append(f"User SNP {snp_name}: allele={allele}, ref={ref_allele}, alt={alt_allele}, result=2 (derived)")
+            display_labels[snp_name] = rsid if rsid else snp_name
+            log_lines.append(
+                f"User SNP {snp_name}: match={match_kind}, allele={allele}, ref={ref_allele}, alt={alt_allele}, result=2 (derived)"
+            )
         else:
-            log_lines.append(f"User SNP {snp_name}: allele={allele}, ref={ref_allele}, alt={alt_allele}, result=NA (no match)")
+            log_lines.append(
+                f"User SNP {snp_name}: match={match_kind}, allele={allele}, ref={ref_allele}, alt={alt_allele}, result=NA (no match)"
+            )
 
-    # Write log to file for review
+    # write a small debug log for review
     with open("user_snp_debug.log", "w") as logf:
         for line in log_lines:
             logf.write(line + "\n")
 
-    return result
+    return result, display_labels

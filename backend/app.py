@@ -30,7 +30,7 @@ def match():
         return jsonify({'error': 'Missing genotype file'}), 400
 
     file_content = uploaded.read().decode('utf-8', errors='replace')
-    user_genotypes = parse_user_file(file_content, DB_PATH)
+    user_genotypes, user_labels = parse_user_file(file_content, DB_PATH)
     if not user_genotypes:
         return jsonify({
             'error': 'Sorry, this tool did not recognize any SNPs from your file in our Y SNP database.'
@@ -48,6 +48,7 @@ def match():
         DB_PATH,
         resolved,
         user_genotypes,
+        user_labels=user_labels,
         limit=limit,
         min_snps=1,  # allow matches with as few as 1 SNP
     )

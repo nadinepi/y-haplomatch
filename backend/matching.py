@@ -1,201 +1,261 @@
-import sqlite3
 import logging
 import re
+import sqlite3
 
 
 SNP24_POSITION_RE = re.compile(r'^snp_24_(\d+)(?:_|$)', re.IGNORECASE)
 
+
 def _strip_plink_suffix(snp_name):
-    # Normalize SNP names for matching.
-    if snp_name.lower().startswith("snp_24_"):
+    # normalize SNP names for matching
+    if snp_name.lower().startswith('snp_24_'):
         pos = _extract_marker_position(snp_name)
         if pos is not None:
-            return f"snp_24_{pos}"
+            return f'snp_24_{pos}'
 
-    # remove _1 .1 etc
-    if "_" in snp_name:
-        snp_name = snp_name.rsplit("_", 1)[0]
-    if "." in snp_name:
-        snp_name = snp_name.split(".", 1)[0]
+    if '_' in snp_name:
+        snp_name = snp_name.rsplit('_', 1)[0]
 
     return snp_name
 
 
+def _split_aliases(text):
+    # some tree nodes use slash-separated aliases
+    return [part.strip() for part in str(text).split('/') if part.strip() and part.strip() != '#']
+
+
 def _extract_marker_position(snp_name):
-    # extract Y-position from markers
+    # pull the Y position from PLINK marker names
     m = SNP24_POSITION_RE.match(snp_name)
     if m:
         return int(m.group(1))
     return None
 
 
-def resolve_haplogroup_simple(db_path, user_input):
-    # figure out haplogroup from user input
+def _load_tree_data(cur):
+    # load the 2016 tree and its aliases from the database
+    cur.execute("SELECT child, parent FROM haplogroup_tree")
+    tree_rows = cur.fetchall()
 
+    parent_by_node = {}
+    children_by_node = {}
+    alias_to_node = {}
+
+    for child_raw, parent_raw in tree_rows:
+        child_aliases = _split_aliases(child_raw)
+        parent_aliases = _split_aliases(parent_raw)
+        if not child_aliases:
+            continue
+
+        child = child_aliases[0]
+        parent = parent_aliases[0] if parent_aliases else None
+
+        parent_by_node[child] = parent
+        children_by_node.setdefault(child, set())
+        if parent:
+            children_by_node.setdefault(parent, set()).add(child)
+
+        for alias in child_aliases:
+            alias_to_node[alias.upper()] = child
+        for alias in parent_aliases:
+            alias_to_node[alias.upper()] = parent
+
+    return alias_to_node, parent_by_node, children_by_node
+
+
+def _resolve_tree_name(name, alias_to_node):
+    # map any tree alias to its canonical 2016 node name
+    if not name:
+        return None
+    return alias_to_node.get(name.strip().upper())
+
+
+def _collect_descendants(start_node, children_by_node):
+    # collect one node and all of its children
+    wanted = set()
+    stack = [start_node]
+
+    while stack:
+        node = stack.pop()
+        if not node or node in wanted:
+            continue
+        wanted.add(node)
+        for child in children_by_node.get(node, set()):
+            if child not in wanted:
+                stack.append(child)
+
+    return wanted
+
+
+def _make_placeholders(items):
+    return ','.join('?' for _ in items)
+
+
+def resolve_haplogroup_simple(db_path, user_input):
+    # figure out which 2016 haplogroup branch to use
     h = (user_input or '').strip().rstrip('?*~')
     if not h:
         return None, None, False
 
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
+    alias_to_node, _, _ = _load_tree_data(cur)
 
-    # try using SNP to select haplogroup from db
-    candidate_snp = h.split('-', 1)[1] if '-' in h else h
-    candidate_snp = candidate_snp.strip()
-    for snp_name in (candidate_snp, f'{candidate_snp}.1', f'{candidate_snp}.2', f'{candidate_snp}.3'):
-        cur.execute(
-            "SELECT haplogroup FROM snp_reference WHERE UPPER(snp_name) = UPPER(?) LIMIT 1",
-            (snp_name,),
-        )
-        row = cur.fetchone()
-        if row and row[0]:
+    if '-' not in h:
+        direct_node = _resolve_tree_name(h, alias_to_node)
+        if direct_node:
             conn.close()
-            return row[0], candidate_snp, False
+            return direct_node, None, False
 
-    # otherwise treat as haplogroup text
-    token = h.split('-', 1)[0].strip()
-    cur.execute("SELECT 1 FROM snp_reference WHERE haplogroup = ? LIMIT 1", (token,))
-    has_ref = cur.fetchone() is not None
-    if not has_ref:
-        cur.execute("SELECT 1 FROM individuals WHERE y_haplogroup_clean = ? LIMIT 1", (token,))
-        has_ref = cur.fetchone() is not None
+    candidate_snp = h.split('-', 1)[1].strip() if '-' in h else h
+    cur.execute(
+        "SELECT haplogroup FROM snp_reference WHERE UPPER(snp_name) = UPPER(?) LIMIT 1",
+        (candidate_snp,),
+    )
+    row = cur.fetchone()
+    if row and row[0]:
+        conn.close()
+        return row[0], candidate_snp, False
+
+    fallback_used = False
+    fallback_node = None
+    if '-' in h:
+        prefix = h.split('-', 1)[0].strip()
+        fallback_node = _resolve_tree_name(prefix, alias_to_node)
+        fallback_used = fallback_node is not None
+    else:
+        fallback_node = _resolve_tree_name(h, alias_to_node)
 
     conn.close()
-    if has_ref:
-        return token, None, '-' in h
-    else:
-        return None, None, False
+    if fallback_node:
+        return fallback_node, None, fallback_used
     return None, None, False
 
 
-def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=1):
-    import logging
+def match_by_genotype(db_path, user_haplo, user_genotypes, user_labels=None, limit=1000, min_snps=1):
     logging.basicConfig(filename='match_debug.log', level=logging.DEBUG, format='%(message)s')
-    # normalize user SNP names
+    user_labels = user_labels or {}
+
+    # normalize the parsed user SNP names
     normalized_user_genotypes = {}
+    normalized_user_labels = {}
     for snp, val in user_genotypes.items():
         base = _strip_plink_suffix(snp)
         normalized_user_genotypes[base.upper()] = val
+        normalized_user_labels[base.upper()] = user_labels.get(snp, user_labels.get(base, snp))
     user_genotypes = normalized_user_genotypes
+    user_labels = normalized_user_labels
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    # get all SNPs on this haplogroup branch + descendants
+    alias_to_node, _, children_by_node = _load_tree_data(cur)
+    branch_root = _resolve_tree_name(user_haplo, alias_to_node) or user_haplo
+    branch_nodes = sorted(_collect_descendants(branch_root, children_by_node))
+    if not branch_nodes:
+        conn.close()
+        return []
+
+    branch_placeholders = _make_placeholders(branch_nodes)
+
+    # load the canonical 2016 SNPs on this branch
     cur.execute(
-        """
+        f"""
         SELECT DISTINCT snp_name, position
         FROM snp_reference
-        WHERE haplogroup = ? OR haplogroup LIKE ?
+        WHERE haplogroup IN ({branch_placeholders})
         """,
-        (user_haplo, f"{user_haplo}%")
+        branch_nodes,
     )
-    relevant_rows = [row for row in cur]
-
-    # DEBUG: Print candidate sample IDs and haplogroups at this level (using individuals table)
-    cur.execute(
-        """
-        SELECT id, y_haplogroup, y_haplogroup_clean
-        FROM individuals
-        WHERE y_haplogroup = ?
-        """,
-        (user_haplo,)
-    )
-    candidates = cur.fetchall()
-    with open('match_debug.log', 'a') as logf:
-        logf.write(f"Candidate individuals at haplogroup '{user_haplo}': {[f'{row[0]} (y_haplogroup={row[1]}, y_haplogroup_clean={row[2]})' for row in candidates]}\n")
+    relevant_rows = cur.fetchall()
+    if not relevant_rows:
+        with open('match_debug.log', 'a') as logf:
+            logf.write(f"No canonical 2016 SNPs found for haplogroup {branch_root}\n")
+        conn.close()
+        return []
 
     relevant_positions = {}
-    rsid_by_position = {}
     user_value_by_position = {}
     user_label_by_position = {}
     for row in relevant_rows:
-        snp_name = row[0]
-        position = row[1]
-        if not snp_name:
+        snp_name = row['snp_name']
+        position = row['position']
+        if position is None:
             continue
-        key = snp_name.upper()
-        if position is not None and position not in relevant_positions:
-            relevant_positions[position] = snp_name
-        if position is not None and key.startswith('RS') and position not in rsid_by_position:
-            rsid_by_position[position] = key
-        if position is not None and key in user_genotypes:
-            # keep the strongest user signal for this position (2 over 0).
+        relevant_positions.setdefault(position, snp_name)
+
+        key = str(snp_name).upper()
+        if key in user_genotypes:
             prev = user_value_by_position.get(position)
             cur_val = user_genotypes[key]
             if prev is None or cur_val > prev:
                 user_value_by_position[position] = cur_val
-                user_label_by_position[position] = key
+                user_label_by_position[position] = user_labels.get(key, key)
 
-    def _shared_mutation_label(pos):
-        canonical = str(relevant_positions.get(pos, pos)).upper()
-        rsid = rsid_by_position.get(pos)
-        user_label = user_label_by_position.get(pos)
-
-        # prefer what the user has when it is an rsID
-        if user_label and user_label.startswith('RS'):
-            return user_label if user_label == canonical else f"{user_label} ({canonical})"
-        # if not, prefer a known rsID alias for display
-        if rsid:
-            return rsid if rsid == canonical else f"{rsid} ({canonical})"
-        # fall back to user label or canonical ISOGG name
-        if user_label:
-            return user_label if user_label == canonical else f"{user_label} ({canonical})"
-        return canonical
-
-    # load metadata only for relevant haplogroup branch
-    cur.execute("""
-        SELECT id, y_haplogroup, y_haplogroup_clean, y_terminal,
-               group_id, locality, country, lat, lon,
-               date_mean, full_date, full_date_range, n_called
-        FROM individuals
-        WHERE y_haplogroup_clean = ?
-           OR y_haplogroup_clean LIKE ?
-    """, (user_haplo, f"{user_haplo}%"))
-    ind_meta = {row['id']: dict(row) for row in cur}
-    if not ind_meta:
+    if not user_value_by_position:
         with open('match_debug.log', 'a') as logf:
-            logf.write(f"No individuals found for haplogroup {user_haplo}\n")
+            logf.write(f"No user SNPs overlap the 2016 branch for {branch_root}\n")
         conn.close()
         return []
 
-    # position-first targets, faster than snp name
     target_positions = sorted(user_value_by_position.keys())
-    if not target_positions:
-        with open('match_debug.log', 'a') as logf:
-            logf.write(f"No target positions (user SNPs) for haplogroup {user_haplo}\n")
-        conn.close()
-        return []
-
-    # identify user-derived SNPs
     user_derived_positions = {pos for pos, val in user_value_by_position.items() if val == 2}
     user_derived_total = len(user_derived_positions)
     if user_derived_total == 0:
         with open('match_debug.log', 'a') as logf:
-            logf.write(f"No user derived SNPs for haplogroup {user_haplo}\n")
+            logf.write(f"No user derived SNPs for haplogroup {branch_root}\n")
         conn.close()
         return []
 
-    # find best matches by position first
-    placeholders = ','.join('?' for _ in target_positions)
-    cur.execute(f"""
+    # load individuals on the same branch
+    cur.execute(
+        f"""
+        SELECT id, y_haplogroup, y_haplogroup_clean, y_terminal,
+               group_id, locality, country, lat, lon,
+               date_mean, full_date, full_date_range, n_called
+        FROM individuals
+        WHERE y_haplogroup_clean IN ({branch_placeholders})
+        """,
+        branch_nodes,
+    )
+    ind_meta = {row['id']: dict(row) for row in cur.fetchall()}
+    if not ind_meta:
+        with open('match_debug.log', 'a') as logf:
+            logf.write(f"No individuals found for haplogroup {branch_root}\n")
+        conn.close()
+        return []
+
+    geno_placeholders = _make_placeholders(target_positions)
+    cur.execute(
+        f"""
         SELECT g.individual_id, g.position, MAX(g.is_derived) AS is_derived
         FROM genotypes g
         JOIN individuals i ON i.id = g.individual_id
-        WHERE (i.y_haplogroup_clean = ? OR i.y_haplogroup_clean LIKE ?)
-          AND g.position IN ({placeholders})
+        WHERE i.y_haplogroup_clean IN ({branch_placeholders})
+          AND g.position IN ({geno_placeholders})
         GROUP BY g.individual_id, g.position
-    """, [user_haplo, f"{user_haplo}%", *target_positions])
+        """,
+        branch_nodes + target_positions,
+    )
 
     ind_genos = {}
-    for row in cur:
+    for row in cur.fetchall():
         iid = row['individual_id']
         ind_genos.setdefault(iid, {})[row['position']] = row['is_derived']
     conn.close()
 
+    def shared_mutation_label(pos):
+        # show the user's SNP label when we have it
+        canonical = str(relevant_positions.get(pos, pos)).upper()
+        user_label = user_label_by_position.get(pos)
 
-    # score each individual
+        if user_label and user_label.startswith('RS'):
+            return user_label if user_label == canonical else f"{user_label} ({canonical})"
+        if user_label:
+            return user_label if user_label == canonical else f"{user_label} ({canonical})"
+        return canonical
+
     results = []
     for iid, genos in ind_genos.items():
         meta = ind_meta.get(iid)
@@ -205,8 +265,8 @@ def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=
         snps_compared = 0
         snps_matched = 0
         shared_mutations = []
-
         overlap_debug = []
+
         for pos in target_positions:
             user_val = user_value_by_position[pos]
             sample_val = genos.get(pos)
@@ -215,57 +275,59 @@ def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=
 
             snps_compared += 1
             overlap_debug.append((pos, user_val, sample_val))
-            sample_is_alt = sample_val == 1
-            user_is_alt = user_val > 0
-
-            # count only shared derived
-            if pos in user_derived_positions and user_is_alt and sample_is_alt:
+            if pos in user_derived_positions and sample_val == 1:
                 snps_matched += 1
-                shared_mutations.append(_shared_mutation_label(pos))
+                shared_mutations.append(shared_mutation_label(pos))
 
-        meta_id = meta.get('id', meta.get('individual_id', 'UNKNOWN'))
+        meta_id = meta.get('id', 'UNKNOWN')
         logging.debug(f"[DEBUG] Candidate {meta_id} SNP overlap:")
         for pos, user_val, sample_val in overlap_debug:
             logging.debug(f"    pos={pos}, user_val={user_val}, sample_val={sample_val}")
 
-        # DEBUG: Print SNP overlap and matches for each candidate
-        meta_id = meta.get('id', meta.get('individual_id', 'UNKNOWN'))
         with open('match_debug.log', 'a') as logf:
             logf.write(f"Candidate {meta_id}: snps_compared={snps_compared}, snps_matched={snps_matched}\n")
-        # skip tiny overlaps (less than 1)
+
         if snps_compared < min_snps:
             continue
 
-        match_score = snps_matched / max(user_derived_total,1)
+        match_score = snps_matched / max(user_derived_total, 1)
         derived_agreement = snps_matched / snps_compared if snps_compared > 0 else 0
-        low_overlap = snps_compared < 5
 
         results.append({
             **meta,
-            'match_score': round(match_score,4),
-            'derived_agreement': round(derived_agreement,4),
+            'match_score': round(match_score, 4),
+            'derived_agreement': round(derived_agreement, 4),
             'snps_compared': snps_compared,
             'snps_matched': snps_matched,
             'user_derived_total': user_derived_total,
-            'low_overlap': low_overlap,
-            'shared_mutations': shared_mutations
+            'low_overlap': snps_compared < 5,
+            'shared_mutations': shared_mutations,
         })
 
-    # best match_score, then most overlap
     results.sort(key=lambda r: (-r['match_score'], -r['snps_compared']))
     with open('match_debug.log', 'a') as logf:
-        logf.write(f"Returning {len(results)} results: {[r.get('id','UNKNOWN') for r in results]}\n")
+        logf.write(f"Returning {len(results)} results: {[r.get('id', 'UNKNOWN') for r in results]}\n")
     return results[:limit]
 
 
-def match_with_broadening(db_path, user_haplo, user_genotypes, limit=1000, min_snps=1):
-    # try matching with broader and broader haplogroup
-    haplo = user_haplo
+def match_with_broadening(db_path, user_haplo, user_genotypes, user_labels=None, limit=1000, min_snps=1):
+    # only broaden if the first exact branch gives no matches
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    alias_to_node, parent_by_node, _ = _load_tree_data(cur)
+    conn.close()
+
+    haplo = _resolve_tree_name(user_haplo, alias_to_node) or user_haplo
     for attempt in range(20):
         print(f"[DEBUG] Attempt {attempt}: Trying haplogroup '{haplo}'")
-        results = match_by_genotype(db_path, haplo, user_genotypes, limit=limit, min_snps=min_snps)
+        results = match_by_genotype(db_path, haplo, user_genotypes, user_labels=user_labels, limit=limit, min_snps=min_snps)
         print(f"[DEBUG] Results found: {len(results)} for haplogroup '{haplo}'")
-        if results or len(haplo) <= 1:
+        if results:
             return results, haplo, attempt
-        haplo = haplo[:-1]  # shorten haplogroup
-    return results, haplo, 20
+
+        parent = parent_by_node.get(haplo)
+        if not parent:
+            return results, haplo, attempt
+        haplo = parent
+
+    return [], haplo, 20

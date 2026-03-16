@@ -9,25 +9,13 @@ const COLUMNS = [
   { key: 'snps_matched', label: 'Shared Mutations' },
 ]
 
-const formatSharedMutation = (mutation) => {
-  if (typeof mutation !== 'string') return String(mutation)
-  // if there's an rsID like "RS123 (M269)", just show the rsid part
-  const [left] = mutation.split('(', 1)
-  const label = left.trim()
-  // make rsID lowercase if it starts with RS
-  if (/^RS\d+/i.test(label)) {
-    return label.toLowerCase()
-  }
-  return label
-}
-
 // get a unique list of shared mutation labels for this result
 const getSharedList = (result) => {
   if (!Array.isArray(result.shared_mutations)) return []
   const seen = new Set()
   const cleaned = []
   for (const mut of result.shared_mutations) {
-    const label = formatSharedMutation(mut)
+    const label = typeof mut === 'string' ? mut.trim() : String(mut)
     if (!label || seen.has(label)) continue
     seen.add(label)
     cleaned.push(label)
@@ -137,12 +125,19 @@ function ResultsTable({ results }) {
                 <tr key={r.id + '-details'}>
                   <td colSpan={COLUMNS.length + 2} className="details-row-cell">
                     <div className="details-panel">
-                      <div className="details-title">Shared mutation rsIDs</div>
+                      <div className="details-title">Shared mutation labels</div>
                       {getSharedList(r).length > 0 ? (
                         <div className="mutation-chip-list">
-                          {getSharedList(r).map((mut) => (
-                            <span key={mut} className="mutation-chip">{mut}</span>
-                          ))}
+                          {getSharedList(r).map((mut) => {
+                            let display = mut;
+                            if (typeof mut === 'string') {
+                              // Replace any leading RS/rs/Rs/rS with lowercase 'rs'
+                              display = mut.replace(/^\s*rs/i, 'rs');
+                            }
+                            return (
+                              <span key={mut} className="mutation-chip">{display}</span>
+                            );
+                          })}
                         </div>
                       ) : (
                         <span className="details-empty">No shared mutation labels available.</span>
