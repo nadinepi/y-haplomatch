@@ -5,7 +5,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-AADR_DIR="$PROJECT_DIR/ProjetcFiles/AADR_54.1"
+AADR_DIR="$PROJECT_DIR/data/AADR_54.1"
 OUT_DIR="$PROJECT_DIR/data/plink_out"
 mkdir -p "$OUT_DIR"
 

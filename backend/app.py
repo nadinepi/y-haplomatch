@@ -49,6 +49,7 @@ def match():
         resolved,
         user_genotypes,
         limit=limit,
+        min_snps=1,  # allow matches with as few as 1 SNP
     )
 
     # resolution notes

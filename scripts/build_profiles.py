@@ -22,11 +22,11 @@ def is_invalid_haplo(h):
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RAW_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'plink_out', 'aadr_chrY.raw')
-ANNO_FILE = os.path.join(SCRIPT_DIR, '..', 'ProjetcFiles', 'AADR_54.1', 'AADR Annotations 2025.csv')
+ANNO_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AADR_54.1', 'AADR Annotations 2025.csv')
 DB_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'ydna.db')
-LOCUS_FILE = os.path.join(SCRIPT_DIR, '..', 'ProjetcFiles', 'AncientYDNA', 'chrY_locusFile_b37_isogg2016.txt')
-SNP_FILE = os.path.join(SCRIPT_DIR, '..', 'ProjetcFiles', 'AncientYDNA', 'snpFile_b37_isogg2019.txt')
-ANCIENT_FILE = os.path.join(SCRIPT_DIR, '..', 'ProjetcFiles', 'AADR_54.1', 'Ancient_samples.txt')
+LOCUS_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AncientYDNA', 'chrY_locusFile_b37_isogg2016.txt')
+SNP_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AncientYDNA', 'snpFile_b37_isogg2019.txt')
+ANCIENT_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AADR_54.1', 'Ancient_samples.txt')
 
 SNP24_POSITION_RE = re.compile(r'^snp_24_(\d+)(?:_|$)', re.IGNORECASE)
 
@@ -64,6 +64,17 @@ def load_snp_reference():
     snp_to_haplo = {}
     snp_rows = []
 
+    # We need the tree for normalization
+    TREE_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AncientYDNA', 'chrY_hGrpTree_isogg2016.txt')
+    tree = load_haplogroup_tree_from_file(TREE_FILE)
+    tree_nodes = set()
+    for child, parent in tree:
+        for name in child.split('/'):
+            tree_nodes.add(name)
+        for name in parent.split('/'):
+            tree_nodes.add(name)
+    tree_by_name = {node.upper(): node for node in tree_nodes}
+
     def add_snp_row(snp_name, position, ref_allele, isogg_haplo, alt_allele):
         if not snp_name or not position or not str(position).isdigit() or not isogg_haplo:
             return
@@ -75,11 +86,19 @@ def load_snp_reference():
         alt_allele = str(alt_allele).strip().upper() if alt_allele else None
         isogg_haplo = str(isogg_haplo).strip()
 
+        # Normalize to cleaned haplogroup using the tree
+        cleaned_haplo = None
+        if isogg_haplo:
+            # Use the same normalization as individuals
+            cleaned_haplo = normalize_haplogroup(isogg_haplo, None, {}, tree_by_name)
+        if not cleaned_haplo:
+            return
+
         key = snp_name.upper()
         if key in snp_to_haplo:
             return
-        snp_to_haplo[key] = isogg_haplo
-        snp_rows.append((snp_name, position, ref_allele, isogg_haplo, alt_allele))
+        snp_to_haplo[key] = cleaned_haplo
+        snp_rows.append((snp_name, position, ref_allele, cleaned_haplo, alt_allele))
 
     with open(LOCUS_FILE) as f:
         for line in f:
@@ -147,7 +166,6 @@ def load_ancient_ids(path):
 def normalize_haplogroup(raw, terminal_raw, snp_to_haplo, tree_by_name):
     """Try to convert noisy AADR Y labels to one tree node."""
     snp_lookup = {k.upper(): v for k, v in snp_to_haplo.items()}
-
     for source in (raw, terminal_raw):
         if is_invalid_haplo(source):
             continue
@@ -166,26 +184,12 @@ def normalize_haplogroup(raw, terminal_raw, snp_to_haplo, tree_by_name):
             if token.lower().startswith('x') and len(token) > 1:
                 token = token[1:]
 
-            candidates = [token]
+            cand_up = token.strip().upper()
+            if not cand_up:
+                continue
 
-            if '-' in token:
-                candidates.extend([p for p in token.split('-') if p])
-
-            if "'" in token:
-                candidates.append(token.split("'", 1)[0])
-
-            for cand in candidates:
-                cand_up = cand.strip().upper()
-                if not cand_up:
-                    continue
-
-                if cand_up in tree_by_name:
-                    return tree_by_name[cand_up]
-
-                if cand_up in snp_lookup:
-                    mapped_haplo = snp_lookup[cand_up].upper()
-                    if mapped_haplo in tree_by_name:
-                        return tree_by_name[mapped_haplo]
+            if cand_up in tree_by_name:
+                return tree_by_name[cand_up]
 
     return None
 
@@ -329,7 +333,7 @@ def main():
     ref_pos_by_name = {row[0].upper(): row[1] for row in snp_rows}
 
     print("Loading haplogroup tree from file...")
-    TREE_FILE = os.path.join(SCRIPT_DIR, '..', 'ProjetcFiles', 'AncientYDNA', 'chrY_hGrpTree_isogg2016.txt')
+    TREE_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AncientYDNA', 'chrY_hGrpTree_isogg2016.txt')
     tree = load_haplogroup_tree_from_file(TREE_FILE)
     print(f"  {len(tree)} tree edges loaded")
     # Build tree_nodes set from file-based tree, including all alternative names
@@ -416,12 +420,13 @@ def main():
             for snp_name, val, relevant in zip(snp_names, row[6:], snp_is_relevant):
                 if relevant and val != 'NA':
                     geno_val = int(val)
-                    base_name = normalize_plink_marker_name(snp_name)
+                    norm_snp_name = normalize_plink_marker_name(snp_name)
+                    base_name = norm_snp_name
                     position = extract_position_from_marker(base_name)
                     if position is None:
                         position = ref_pos_by_name.get(base_name.upper())
                     is_derived = 1 if geno_val == 2 else 0
-                    geno_rows.append((iid, snp_name, position, geno_val, is_derived))
+                    geno_rows.append((iid, norm_snp_name, position, geno_val, is_derived))
 
             if not geno_rows:
                 skipped += 1

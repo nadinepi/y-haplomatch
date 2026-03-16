@@ -68,7 +68,9 @@ def resolve_haplogroup_simple(db_path, user_input):
     return None, None, False
 
 
-def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=3):
+def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=1):
+    import logging
+    logging.basicConfig(filename='match_debug.log', level=logging.DEBUG, format='%(message)s')
     # normalize user SNP names
     normalized_user_genotypes = {}
     for snp, val in user_genotypes.items():
@@ -90,9 +92,19 @@ def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=
         (user_haplo, f"{user_haplo}%")
     )
     relevant_rows = [row for row in cur]
-    if not relevant_rows:
-        conn.close()
-        return []
+
+    # DEBUG: Print candidate sample IDs and haplogroups at this level (using individuals table)
+    cur.execute(
+        """
+        SELECT id, y_haplogroup, y_haplogroup_clean
+        FROM individuals
+        WHERE y_haplogroup = ?
+        """,
+        (user_haplo,)
+    )
+    candidates = cur.fetchall()
+    with open('match_debug.log', 'a') as logf:
+        logf.write(f"Candidate individuals at haplogroup '{user_haplo}': {[f'{row[0]} (y_haplogroup={row[1]}, y_haplogroup_clean={row[2]})' for row in candidates]}\n")
 
     relevant_positions = {}
     rsid_by_position = {}
@@ -143,12 +155,16 @@ def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=
     """, (user_haplo, f"{user_haplo}%"))
     ind_meta = {row['id']: dict(row) for row in cur}
     if not ind_meta:
+        with open('match_debug.log', 'a') as logf:
+            logf.write(f"No individuals found for haplogroup {user_haplo}\n")
         conn.close()
         return []
 
     # position-first targets, faster than snp name
     target_positions = sorted(user_value_by_position.keys())
     if not target_positions:
+        with open('match_debug.log', 'a') as logf:
+            logf.write(f"No target positions (user SNPs) for haplogroup {user_haplo}\n")
         conn.close()
         return []
 
@@ -156,6 +172,8 @@ def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=
     user_derived_positions = {pos for pos, val in user_value_by_position.items() if val == 2}
     user_derived_total = len(user_derived_positions)
     if user_derived_total == 0:
+        with open('match_debug.log', 'a') as logf:
+            logf.write(f"No user derived SNPs for haplogroup {user_haplo}\n")
         conn.close()
         return []
 
@@ -184,11 +202,11 @@ def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=
         if not meta:
             continue
 
-
         snps_compared = 0
         snps_matched = 0
         shared_mutations = []
 
+        overlap_debug = []
         for pos in target_positions:
             user_val = user_value_by_position[pos]
             sample_val = genos.get(pos)
@@ -196,6 +214,7 @@ def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=
                 continue
 
             snps_compared += 1
+            overlap_debug.append((pos, user_val, sample_val))
             sample_is_alt = sample_val == 1
             user_is_alt = user_val > 0
 
@@ -204,7 +223,16 @@ def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=
                 snps_matched += 1
                 shared_mutations.append(_shared_mutation_label(pos))
 
-        # skip tiny overlaps (less than 3)
+        meta_id = meta.get('id', meta.get('individual_id', 'UNKNOWN'))
+        logging.debug(f"[DEBUG] Candidate {meta_id} SNP overlap:")
+        for pos, user_val, sample_val in overlap_debug:
+            logging.debug(f"    pos={pos}, user_val={user_val}, sample_val={sample_val}")
+
+        # DEBUG: Print SNP overlap and matches for each candidate
+        meta_id = meta.get('id', meta.get('individual_id', 'UNKNOWN'))
+        with open('match_debug.log', 'a') as logf:
+            logf.write(f"Candidate {meta_id}: snps_compared={snps_compared}, snps_matched={snps_matched}\n")
+        # skip tiny overlaps (less than 1)
         if snps_compared < min_snps:
             continue
 
@@ -225,15 +253,18 @@ def match_by_genotype(db_path, user_haplo, user_genotypes, limit=1000, min_snps=
 
     # best match_score, then most overlap
     results.sort(key=lambda r: (-r['match_score'], -r['snps_compared']))
+    with open('match_debug.log', 'a') as logf:
+        logf.write(f"Returning {len(results)} results: {[r.get('id','UNKNOWN') for r in results]}\n")
     return results[:limit]
 
 
-def match_with_broadening(db_path, user_haplo, user_genotypes, limit=1000, min_snps=3):
+def match_with_broadening(db_path, user_haplo, user_genotypes, limit=1000, min_snps=1):
     # try matching with broader and broader haplogroup
     haplo = user_haplo
     for attempt in range(20):
-        print("Trying haplogroup:", haplo)
+        print(f"[DEBUG] Attempt {attempt}: Trying haplogroup '{haplo}'")
         results = match_by_genotype(db_path, haplo, user_genotypes, limit=limit, min_snps=min_snps)
+        print(f"[DEBUG] Results found: {len(results)} for haplogroup '{haplo}'")
         if results or len(haplo) <= 1:
             return results, haplo, attempt
         haplo = haplo[:-1]  # shorten haplogroup

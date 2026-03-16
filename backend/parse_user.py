@@ -75,6 +75,7 @@ def parse_user_file(file_content, db_path):
 
     result = {}
     parsed_snps = []
+    log_lines = []
     for line in file_content.splitlines():
         if not line.strip() or line.strip().startswith('#'):
             continue
@@ -132,9 +133,16 @@ def parse_user_file(file_content, db_path):
             continue
         if allele == ref_allele:
             result[snp_name] = 0
+            log_lines.append(f"User SNP {snp_name}: allele={allele}, ref={ref_allele}, alt={alt_allele}, result=0 (ancestral)")
         elif allele == alt_allele:
             result[snp_name] = 2
+            log_lines.append(f"User SNP {snp_name}: allele={allele}, ref={ref_allele}, alt={alt_allele}, result=2 (derived)")
         else:
-            pass
+            log_lines.append(f"User SNP {snp_name}: allele={allele}, ref={ref_allele}, alt={alt_allele}, result=NA (no match)")
+
+    # Write log to file for review
+    with open("user_snp_debug.log", "w") as logf:
+        for line in log_lines:
+            logf.write(line + "\n")
 
     return result
