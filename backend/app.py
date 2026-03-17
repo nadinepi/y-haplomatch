@@ -2,7 +2,7 @@ import os
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-from matching import match_with_broadening, resolve_haplogroup_simple
+from matching import match_with_broadening, resolve_haplogroup_simple, suggest_haplogroup_from_user_data
 from parse_user import parse_user_file
 
 app = Flask(__name__)
@@ -20,7 +20,7 @@ def match():
         return jsonify({'error': 'Missing haplogroup'}), 400
 
     # resolve haplogroup using SNP reference
-    resolved, snp, fallback = resolve_haplogroup_simple(DB_PATH, user_input)
+    resolved, snp, fallback, tree_version = resolve_haplogroup_simple(DB_PATH, user_input)
     if not resolved:
         return jsonify({'error': f'Could not resolve haplogroup: {user_input}'}), 404
 
@@ -51,6 +51,14 @@ def match():
         user_labels=user_labels,
         limit=limit,
         min_snps=1,  # allow matches with as few as 1 SNP
+        tree_version=tree_version,
+    )
+
+    suggestion = suggest_haplogroup_from_user_data(
+        DB_PATH,
+        resolved,
+        user_genotypes,
+        tree_version,
     )
 
     # resolution notes
@@ -65,9 +73,11 @@ def match():
     response = {
         'resolved_haplogroup': resolved,
         'resolved_snp': snp,
+        'tree_version': tree_version,
         'user_snps_parsed': len(user_genotypes),
         'count': len(results),
         'results': results,
+        'suggested_haplogroup': suggestion,
         'broadened_to': final_haplo if levels_broadened > 0 else None,
         'levels_broadened': levels_broadened,
         'resolution_note': ' '.join(notes) if notes else None

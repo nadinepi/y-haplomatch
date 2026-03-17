@@ -257,14 +257,6 @@ h1 {
   background: #f8fafc;
 }
 
-/* Low-overlap warning row: amber tint */
-.results-table tbody tr.low-overlap-row {
-  background: #fffbeb;
-}
-
-.results-table tbody tr.low-overlap-row:hover {
-  background: #fef3c7;
-}
 
 .low-overlap-badge {
   display: inline-block;

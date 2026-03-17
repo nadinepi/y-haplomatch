@@ -9,18 +9,17 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [data, setData] = useState(null)
+  const [selectedFileName, setSelectedFileName] = useState('')
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!haplogroup.trim() || !file) return
-
+  const runMatch = async (nextHaplogroup, nextFile = file) => {
+    if (!nextHaplogroup.trim() || !nextFile) return
     setLoading(true)
     setError(null)
     setData(null)
 
     const formData = new FormData()
-    formData.append('haplogroup', haplogroup.trim())
-    formData.append('file', file)
+    formData.append('haplogroup', nextHaplogroup.trim())
+    formData.append('file', nextFile)
     formData.append('limit', '1000')
 
     try {
@@ -38,6 +37,35 @@ function App() {
       setError('Could not connect to backend. Is the server running?')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!haplogroup.trim() || !file) return
+    await runMatch(haplogroup, file)
+  }
+
+  const handleSuggestedRerun = async () => {
+    const next = data?.suggested_haplogroup?.haplogroup
+    if (!next || !file) return
+    setHaplogroup(next)
+    await runMatch(next, file)
+  }
+
+  const loadDemoUser = async (runNow = false) => {
+    try {
+      const res = await fetch('/demo_i1_user.txt')
+      const text = await res.text()
+      const demoFile = new File([text], 'demo_i1_user.txt', { type: 'text/plain' })
+      setHaplogroup('I1')
+      setFile(demoFile)
+      setSelectedFileName('demo_i1_user.txt')
+      if (runNow) {
+        await runMatch('I1', demoFile)
+      }
+    } catch (err) {
+      setError('Could not load the built-in demo user.')
     }
   }
 
@@ -61,13 +89,18 @@ function App() {
             />
           </div>
           <div className="form-group">
-            <label htmlFor="file">Genotype file (PLINK .raw or tab-separated)</label>
+            <label htmlFor="file">Genotype file (txt, csv, tsv, or raw)</label>
             <input
               id="file"
               type="file"
               accept=".txt,.raw,.csv,.tsv"
-              onChange={(e) => setFile(e.target.files[0])}
+              onChange={(e) => {
+                const next = e.target.files[0]
+                setFile(next)
+                setSelectedFileName(next ? next.name : '')
+              }}
             />
+            {/* Removed selected file info display */}
           </div>
           <button
             type="submit"
@@ -76,13 +109,21 @@ function App() {
           >
             {loading ? 'Matching...' : 'Find Matches'}
           </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => loadDemoUser(true)}
+            disabled={loading}
+          >
+            Run Demo User
+          </button>
         </div>
       </form>
 
       {loading && (
         <div className="loading">
           <span className="spinner" />
-          Comparing genotypes...
+          Matching your Y positions to ISOGG SNPs...
         </div>
       )}
 
@@ -117,6 +158,22 @@ function App() {
               }</strong>
             </div>
           </div>
+
+          {data.suggested_haplogroup && (
+            <div className="warning" style={{ marginTop: 12 }}>
+              Your uploaded SNPs may better support haplogroup <strong>{data.suggested_haplogroup.haplogroup}</strong>.
+              {' '}
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleSuggestedRerun}
+                disabled={loading}
+                style={{ marginLeft: 10 }}
+              >
+                Rerun with this haplogroup
+              </button>
+            </div>
+          )}
 
           <ResultsMap results={data.results} />
           <ResultsTable results={data.results} />

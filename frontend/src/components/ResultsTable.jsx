@@ -2,12 +2,22 @@ import { useState } from 'react'
 
 const COLUMNS = [
   { key: 'id', label: 'Individual ID' },
+  { key: 'lineage_relation', label: 'Relation' },
   { key: 'y_haplogroup_clean', label: 'Haplogroup' },
   { key: 'country', label: 'Country' },
   { key: 'full_date_range', label: 'Date Range' },
   { key: 'snps_compared', label: 'SNPs Compared' },
   { key: 'snps_matched', label: 'Shared Mutations' },
 ]
+
+const RELATION_LABELS = {
+  exact: 'Exact branch',
+  broader: 'Broader ancestor',
+  downstream: 'Downstream branch',
+  match: 'Position match',
+}
+
+const GROUP_ORDER = ['exact', 'broader', 'downstream', 'match']
 
 // get a unique list of shared mutation labels for this result
 const getSharedList = (result) => {
@@ -51,9 +61,17 @@ function ResultsTable({ results }) {
     return sortAsc ? va - vb : vb - va;
   });
 
+  const grouped = GROUP_ORDER.map((relation) => ({
+    relation,
+    label: RELATION_LABELS[relation],
+    rows: sorted.filter((r) => r.lineage_relation === relation),
+  })).filter((group) => group.rows.length > 0);
+
+  const flatRows = grouped.flatMap((group) => group.rows);
+
   // pagination stuff so we don't show a million rows at once
-  const totalPages = Math.ceil(sorted.length / PAGE_SIZE);
-  const paged = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const totalPages = Math.ceil(flatRows.length / PAGE_SIZE);
+  const paged = flatRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   // handle sorting when you click a column
   const handleSort = (key) => {
@@ -70,6 +88,8 @@ function ResultsTable({ results }) {
   const handlePageChange = (newPage) => {
     setPage(newPage)
   }
+
+  const relationOnPage = new Set(paged.map((r) => r.lineage_relation))
 
   return (
     <div className="results-table-wrapper">
@@ -91,62 +111,67 @@ function ResultsTable({ results }) {
           </tr>
         </thead>
         <tbody>
-          {paged.map((r, i) => (
-            <>
-              <tr key={r.id} className={r.low_overlap ? 'low-overlap-row' : ''} style={{ position: 'relative' }}>
-                <td>{(page - 1) * PAGE_SIZE + i + 1}</td>
-                <td>{r.id}</td>
-                <td>{r.y_haplogroup_clean}</td>
-                <td>{r.country || '—'}</td>
-                <td>
-                  {r.full_date_range || '—'}
-                </td>
-                <td>{r.snps_compared ?? '—'}</td>
-                <td>{r.snps_matched ?? '—'}</td>
-                <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
-                  <button
-                    onClick={() => setExpandedRowIds(prev => {
-                      const newSet = new Set(prev)
-                      if (newSet.has(r.id)) {
-                        newSet.delete(r.id)
-                      } else {
-                        newSet.add(r.id)
-                      }
-                      return newSet
-                    })}
-                    aria-label={expandedRowIds.has(r.id) ? 'Hide SNP list' : 'Show SNP list'}
-                    className="details-toggle"
-                  >
-                    {expandedRowIds.has(r.id) ? 'Hide' : 'Show'}
-                  </button>
-                </td>
-              </tr>
-              {expandedRowIds.has(r.id) && (
-                <tr key={r.id + '-details'}>
-                  <td colSpan={COLUMNS.length + 2} className="details-row-cell">
-                    <div className="details-panel">
-                      <div className="details-title">Shared mutation labels</div>
-                      {getSharedList(r).length > 0 ? (
-                        <div className="mutation-chip-list">
-                          {getSharedList(r).map((mut) => {
-                            let display = mut;
-                            if (typeof mut === 'string') {
-                              // Replace any leading RS/rs/Rs/rS with lowercase 'rs'
-                              display = mut.replace(/^\s*rs/i, 'rs');
-                            }
-                            return (
-                              <span key={mut} className="mutation-chip">{display}</span>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <span className="details-empty">No shared mutation labels available.</span>
-                      )}
-                    </div>
+          {grouped.map((group) => (
+            relationOnPage.has(group.relation) ? (
+              <>
+                <tr key={group.relation + '-header'}>
+                  <td colSpan={COLUMNS.length + 2} className="details-row-cell" style={{ background: '#f7f7f7', fontWeight: 600 }}>
+                    {group.label}
                   </td>
                 </tr>
-              )}
-            </>
+                {paged.filter((r) => r.lineage_relation === group.relation).map((r, i) => (
+                  <>
+                    <tr key={r.id} style={{ position: 'relative' }}>
+                      <td>{(page - 1) * PAGE_SIZE + paged.indexOf(r) + 1}</td>
+                      <td>{r.id}</td>
+                      <td>{RELATION_LABELS[r.lineage_relation] || '—'}</td>
+                      <td>{r.y_haplogroup_clean}</td>
+                      <td>{r.country || '—'}</td>
+                      <td>
+                        {r.full_date_range || '—'}
+                      </td>
+                      <td>{r.snps_compared ?? '—'}</td>
+                      <td>{r.snps_matched ?? '—'}</td>
+                      <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
+                        <button
+                          onClick={() => setExpandedRowIds(prev => {
+                            const newSet = new Set(prev)
+                            if (newSet.has(r.id)) {
+                              newSet.delete(r.id)
+                            } else {
+                              newSet.add(r.id)
+                            }
+                            return newSet
+                          })}
+                          aria-label={expandedRowIds.has(r.id) ? 'Hide SNP list' : 'Show SNP list'}
+                          className="details-toggle"
+                        >
+                          {expandedRowIds.has(r.id) ? 'Hide' : 'Show'}
+                        </button>
+                      </td>
+                    </tr>
+                    {expandedRowIds.has(r.id) && (
+                      <tr key={r.id + '-details'}>
+                        <td colSpan={COLUMNS.length + 2} className="details-row-cell">
+                          <div className="details-panel">
+                            <div className="details-title">Shared mutation labels</div>
+                            {getSharedList(r).length > 0 ? (
+                              <div className="mutation-chip-list">
+                                {getSharedList(r).map((mut) => (
+                                  <span key={mut} className="mutation-chip">{mut}</span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="details-empty">No shared mutation labels available.</span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                ))}
+              </>
+            ) : null
           ))}
         </tbody>
       </table>

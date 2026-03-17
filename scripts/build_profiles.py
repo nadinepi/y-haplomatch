@@ -28,6 +28,8 @@ ANNO_XLSX_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AADR_54.1', 'AADR Annot
 DB_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'ydna.db')
 TREE_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AncientYDNA', 'chrY_hGrpTree_isogg2016.txt')
 LOCUS_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AncientYDNA', 'chrY_locusFile_b37_isogg2016.txt')
+TREE_2019_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AncientYDNA', 'chrY_hGrpTree_isogg2019.txt')
+SNP_2019_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AncientYDNA', 'snpFile_b37_isogg2019.txt')
 ANCIENT_FILE = os.path.join(SCRIPT_DIR, '..', 'data', 'AADR_54.1', 'Ancient_samples.txt')
 
 SNP24_POSITION_RE = re.compile(r'^snp_24_(\d+)(?:_|$)', re.IGNORECASE)
@@ -181,7 +183,40 @@ def load_canonical_snp_reference(alias_to_canonical):
             if not cleaned_haplo:
                 continue
 
-            snp_row = (snp_name, int(position), ref_allele, cleaned_haplo, alt_allele)
+            snp_row = (snp_name, int(position), ref_allele, cleaned_haplo, alt_allele, '2016')
+            snp_rows.append(snp_row)
+            snp_to_haplo[snp_name.upper()] = cleaned_haplo
+            rows_by_pos.setdefault(int(position), []).append(snp_row)
+
+    return snp_to_haplo, snp_rows, rows_by_pos
+
+
+def load_2019_snp_reference(alias_to_canonical):
+    # use the 2019 SNP file as an extra reference set
+    snp_to_haplo = {}
+    snp_rows = []
+    rows_by_pos = {}
+
+    with open(SNP_2019_FILE) as f:
+        for line in f:
+            row = line.strip().split('\t')
+            if len(row) < 5:
+                continue
+
+            snp_name = row[0].strip()
+            position = row[1].strip()
+            ref_allele = row[2].strip().upper()
+            raw_haplo = row[3].strip()
+            alt_allele = row[4].strip().upper()
+
+            if not snp_name or not position.isdigit():
+                continue
+
+            cleaned_haplo = normalize_haplogroup(raw_haplo, None, alias_to_canonical)
+            if not cleaned_haplo:
+                continue
+
+            snp_row = (snp_name, int(position), ref_allele, cleaned_haplo, alt_allele, '2019')
             snp_rows.append(snp_row)
             snp_to_haplo[snp_name.upper()] = cleaned_haplo
             rows_by_pos.setdefault(int(position), []).append(snp_row)
@@ -325,11 +360,12 @@ def create_db(db_path):
     )''')
 
     cur.execute('''CREATE TABLE snp_reference (
-        snp_name TEXT PRIMARY KEY,
+        snp_name TEXT,
         position INTEGER,
         ref_allele TEXT,
         haplogroup TEXT,
-        alt_allele TEXT
+        alt_allele TEXT,
+        source TEXT
     )''')
 
     # add a few indexes for lookups
@@ -340,6 +376,8 @@ def create_db(db_path):
     cur.execute('CREATE INDEX idx_haplo_alias_canon ON haplogroup_aliases(canonical_name)')
     cur.execute('CREATE INDEX idx_snpref_haplo ON snp_reference(haplogroup)')
     cur.execute('CREATE INDEX idx_snpref_pos ON snp_reference(position)')
+    cur.execute('CREATE INDEX idx_snpref_source ON snp_reference(source)')
+    cur.execute('CREATE INDEX idx_snpref_source_haplo ON snp_reference(source, haplogroup)')
 
     conn.commit()
     return conn
@@ -348,7 +386,7 @@ def create_db(db_path):
 def main():
     # stop early if the required files are not in place
     annotation_file = find_annotation_file()
-    for path in (RAW_FILE, annotation_file, ANCIENT_FILE, TREE_FILE, LOCUS_FILE):
+    for path in (RAW_FILE, annotation_file, ANCIENT_FILE, TREE_FILE, LOCUS_FILE, TREE_2019_FILE, SNP_2019_FILE):
         require_file(path)
 
     os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
@@ -360,11 +398,23 @@ def main():
     print(f'  {len(haplo_alias_rows)} haplogroup aliases')
 
     print('Loading canonical SNP reference from the 2016 locus file...')
-    snp_to_haplo, snp_rows, rows_by_pos = load_canonical_snp_reference(alias_to_canonical)
-    print(f'  {len(snp_rows)} canonical SNP rows')
+    snp_to_haplo_2016, snp_rows_2016, rows_by_pos_2016 = load_canonical_snp_reference(alias_to_canonical)
+    print(f'  {len(snp_rows_2016)} canonical SNP rows')
 
-    ref_pos_by_name = {row[0].upper(): row[1] for row in snp_rows}
+    print('Loading 2019 haplogroup tree...')
+    raw_tree_rows_2019 = load_haplogroup_tree_from_file(TREE_2019_FILE)
+    alias_to_canonical_2019, _, _ = build_tree_maps(raw_tree_rows_2019)
+
+    print('Loading extra SNP reference from the 2019 SNP file...')
+    snp_to_haplo_2019, snp_rows_2019, rows_by_pos_2019 = load_2019_snp_reference(alias_to_canonical_2019)
+    print(f'  {len(snp_rows_2019)} extra 2019 SNP rows')
+
+    snp_rows = snp_rows_2016 + snp_rows_2019
+    ref_pos_by_name = {}
+    for row in snp_rows:
+        ref_pos_by_name.setdefault(row[0].upper(), row[1])
     ref_positions = {row[1] for row in snp_rows}
+    ref_names = set(snp_to_haplo_2016.keys()) | set(snp_to_haplo_2019.keys())
 
     print('Loading annotations...')
     annotations = load_annotations(annotation_file)
@@ -381,7 +431,7 @@ def main():
     print('Inserting tree and SNP tables...')
     cur.executemany('INSERT INTO haplogroup_tree VALUES (?,?)', canonical_tree_rows)
     cur.executemany('INSERT INTO haplogroup_aliases VALUES (?,?)', haplo_alias_rows)
-    cur.executemany('INSERT INTO snp_reference VALUES (?,?,?,?,?)', snp_rows)
+    cur.executemany('INSERT INTO snp_reference VALUES (?,?,?,?,?,?)', snp_rows)
     conn.commit()
 
     print('Loading plink .raw file...')
@@ -389,15 +439,15 @@ def main():
         header = f.readline().strip().split()
         snp_names = header[6:]
 
-        # only keep Y SNPs that connect to the 2016 SNP list
+        # only keep Y SNPs that connect to the 2016 or 2019 SNP list
         snp_is_relevant = []
         for snp_name in snp_names:
             base = normalize_plink_marker_name(snp_name)
             pos = extract_position_from_marker(base)
-            snp_is_relevant.append(base.upper() in snp_to_haplo or pos in ref_positions)
+            snp_is_relevant.append(base.upper() in ref_names or pos in ref_positions)
 
         n_relevant = sum(snp_is_relevant)
-        print(f'  {len(snp_names)} Y-SNPs total, {n_relevant} relevant to the 2016 SNP list')
+        print(f'  {len(snp_names)} Y-SNPs total, {n_relevant} relevant to the 2016/2019 SNP list')
 
         inserted = 0
         skipped = 0

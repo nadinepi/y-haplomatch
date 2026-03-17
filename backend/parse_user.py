@@ -1,7 +1,6 @@
 # Parse user-uploaded genotype files for Y chromosome SNPs
 
 import re
-import sqlite3
 
 
 def _split_row(raw_line):
@@ -19,19 +18,9 @@ def _split_row(raw_line):
 
 
 def parse_user_file(file_content, db_path):
-    # parse a user genotype file and return 2016 SNP names
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT snp_name, position, ref_allele, alt_allele FROM snp_reference ORDER BY position, snp_name"
-    )
-    snp_by_name = {}
-    snp_by_pos = {}
-    for name, pos, ref, alt in cur.fetchall():
-        snp_by_name[name.upper()] = (name, pos, ref, alt)
-        snp_by_pos.setdefault(str(pos), (name, pos, ref, alt))
-    conn.close()
+    # parse a user genotype file and return Y positions with user alleles
+    # db_path is kept in the function signature so the app code can stay simple
+    _ = db_path
 
     # acceptable labels for y chromosome in the chromosome column
     y_labels = {
@@ -92,11 +81,10 @@ def parse_user_file(file_content, db_path):
             continue
 
         # get position
-        pos = parts[idx_pos].strip() if len(parts) > idx_pos else ''
-        try:
-            int(pos)
-        except Exception:
+        pos_text = parts[idx_pos].strip() if len(parts) > idx_pos else ''
+        if not pos_text.isdigit():
             continue
+        pos = int(pos_text)
 
         # get alleles or genotype
         allele1 = allele2 = None
@@ -109,49 +97,21 @@ def parse_user_file(file_content, db_path):
                 allele1, allele2 = genotype[0], genotype[1]
             elif len(genotype) == 1:
                 allele1 = allele2 = genotype
-        if not allele1:
-            continue
 
-        # match by 2016 SNP name first, then by position
-        rsid = parts[idx_rsid].strip().upper() if len(parts) > idx_rsid else ''
-        match_kind = None
-        snp_info = None
-
-        if rsid and rsid in snp_by_name:
-            snp_info = snp_by_name[rsid]
-            match_kind = 'DIRECT_2016_NAME'
-        elif pos in snp_by_pos:
-            snp_info = snp_by_pos[pos]
-            match_kind = 'POS_MATCH_2016'
-        else:
-            log_lines.append(f"User SNP {rsid or pos}: no 2016 match in SNP table")
-            continue
-
-        snp_name, _, ref_allele, alt_allele = snp_info
-        ref_allele = (ref_allele or '').upper()
-        alt_allele = (alt_allele or '').upper()
-
-        # Y is haploid, so just use the first allele
         allele = allele1
-        if allele in ('', '-', '--', '0', 'N'):
+        if not allele or allele in ('', '-', '--', '0', 'N'):
             continue
 
-        if allele == ref_allele:
-            result[snp_name] = 0
-            display_labels[snp_name] = rsid if rsid else snp_name
-            log_lines.append(
-                f"User SNP {snp_name}: match={match_kind}, allele={allele}, ref={ref_allele}, alt={alt_allele}, result=0 (ancestral)"
-            )
-        elif allele == alt_allele:
-            result[snp_name] = 2
-            display_labels[snp_name] = rsid if rsid else snp_name
-            log_lines.append(
-                f"User SNP {snp_name}: match={match_kind}, allele={allele}, ref={ref_allele}, alt={alt_allele}, result=2 (derived)"
-            )
-        else:
-            log_lines.append(
-                f"User SNP {snp_name}: match={match_kind}, allele={allele}, ref={ref_allele}, alt={alt_allele}, result=NA (no match)"
-            )
+        rsid = parts[idx_rsid].strip() if len(parts) > idx_rsid else ''
+        label = rsid if rsid else str(pos)
+
+        # if the same Y position appears more than once, keep the first real allele
+        if pos not in result:
+            result[pos] = allele
+            display_labels[pos] = label
+            log_lines.append(f"Accepted Y position {pos} with allele {allele} and label {label}")
+        elif result[pos] != allele:
+            log_lines.append(f"Skipped duplicate Y position {pos} with conflicting allele {allele}")
 
     # write a small debug log for review
     with open("user_snp_debug.log", "w") as logf:
