@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 
 const COLUMNS = [
   { key: 'id', label: 'Individual ID' },
@@ -34,7 +34,7 @@ const getSharedList = (result) => {
 }
 
 
-function ResultsTable({ results }) {
+function ResultsTable({ results, selectedResultId, onSelectResult }) {
   const [sortKey, setSortKey] = useState('snps_matched')
   const [sortAsc, setSortAsc] = useState(false)
   const [expandedRowIds, setExpandedRowIds] = useState(new Set())
@@ -42,32 +42,42 @@ function ResultsTable({ results }) {
   const PAGE_SIZE = 50
 
   // only keep results that actually have some shared mutations and were compared
-  const filtered = results.filter(r => {
+  const filtered = useMemo(() => results.filter(r => {
     // shared_mutations can be an array or a number (snps_matched)
     const shared = Array.isArray(r.shared_mutations) ? r.shared_mutations.length : r.snps_matched;
     return shared > 0 && r.snps_compared > 0;
-  });
+  }), [results]);
 
   if (!filtered || filtered.length === 0) {
     return <div className="info">No matching individuals found.</div>;
   }
 
-  const sorted = [...filtered].sort((a, b) => {
+  const sorted = useMemo(() => [...filtered].sort((a, b) => {
     let va = a[sortKey];
     let vb = b[sortKey];
     if (va == null) va = sortAsc ? Infinity : -Infinity;
     if (vb == null) vb = sortAsc ? Infinity : -Infinity;
     if (typeof va === 'string') return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
     return sortAsc ? va - vb : vb - va;
-  });
+  }), [filtered, sortKey, sortAsc]);
 
-  const grouped = GROUP_ORDER.map((relation) => ({
+  const grouped = useMemo(() => GROUP_ORDER.map((relation) => ({
     relation,
     label: RELATION_LABELS[relation],
     rows: sorted.filter((r) => r.lineage_relation === relation),
-  })).filter((group) => group.rows.length > 0);
+  })).filter((group) => group.rows.length > 0), [sorted]);
 
-  const flatRows = grouped.flatMap((group) => group.rows);
+  const flatRows = useMemo(() => grouped.flatMap((group) => group.rows), [grouped]);
+
+  useEffect(() => {
+    if (!selectedResultId) return
+
+    const rowIndex = flatRows.findIndex((r) => r.id === selectedResultId)
+    if (rowIndex === -1) return
+
+    const nextPage = Math.floor(rowIndex / PAGE_SIZE) + 1
+    setPage(nextPage)
+  }, [selectedResultId, flatRows])
 
   // pagination stuff so we don't show a million rows at once
   const totalPages = Math.ceil(flatRows.length / PAGE_SIZE);
@@ -87,6 +97,24 @@ function ResultsTable({ results }) {
   // go to a different page
   const handlePageChange = (newPage) => {
     setPage(newPage)
+  }
+
+  const handleRowClick = (rowId) => {
+    if (onSelectResult) {
+      onSelectResult(rowId)
+    }
+  }
+
+  const toggleExpanded = (rowId) => {
+    setExpandedRowIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(rowId)) {
+        next.delete(rowId)
+      } else {
+        next.add(rowId)
+      }
+      return next
+    })
   }
 
   const relationOnPage = new Set(paged.map((r) => r.lineage_relation))
@@ -113,15 +141,19 @@ function ResultsTable({ results }) {
         <tbody>
           {grouped.map((group) => (
             relationOnPage.has(group.relation) ? (
-              <>
+              <Fragment key={group.relation}>
                 <tr key={group.relation + '-header'}>
-                  <td colSpan={COLUMNS.length + 2} className="details-row-cell" style={{ background: '#f7f7f7', fontWeight: 600 }}>
+                  <td colSpan={COLUMNS.length + 2} className="details-row-cell result-group-header">
                     {group.label}
                   </td>
                 </tr>
-                {paged.filter((r) => r.lineage_relation === group.relation).map((r, i) => (
-                  <>
-                    <tr key={r.id} style={{ position: 'relative' }}>
+                {paged.filter((r) => r.lineage_relation === group.relation).map((r) => (
+                  <Fragment key={r.id}>
+                    <tr
+                      className={`result-row ${selectedResultId === r.id ? 'result-row-selected' : ''}`}
+                      style={{ position: 'relative' }}
+                      onClick={() => handleRowClick(r.id)}
+                    >
                       <td>{(page - 1) * PAGE_SIZE + paged.indexOf(r) + 1}</td>
                       <td>{r.id}</td>
                       <td>{RELATION_LABELS[r.lineage_relation] || '—'}</td>
@@ -134,15 +166,10 @@ function ResultsTable({ results }) {
                       <td>{r.snps_matched ?? '—'}</td>
                       <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>
                         <button
-                          onClick={() => setExpandedRowIds(prev => {
-                            const newSet = new Set(prev)
-                            if (newSet.has(r.id)) {
-                              newSet.delete(r.id)
-                            } else {
-                              newSet.add(r.id)
-                            }
-                            return newSet
-                          })}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleExpanded(r.id)
+                          }}
                           aria-label={expandedRowIds.has(r.id) ? 'Hide SNP list' : 'Show SNP list'}
                           className="details-toggle"
                         >
@@ -154,7 +181,14 @@ function ResultsTable({ results }) {
                       <tr key={r.id + '-details'}>
                         <td colSpan={COLUMNS.length + 2} className="details-row-cell">
                           <div className="details-panel">
-                            <div className="details-title">Shared mutation labels</div>
+                            <div className="details-header">
+                              <div>
+                                <div className="details-title">Shared mutation labels</div>
+                                <div className="details-subtitle">
+                                  These are the uploaded SNP labels that matched this ancient sample after haplogroup filtering.
+                                </div>
+                              </div>
+                            </div>
                             {getSharedList(r).length > 0 ? (
                               <div className="mutation-chip-list">
                                 {getSharedList(r).map((mut) => (
@@ -168,9 +202,9 @@ function ResultsTable({ results }) {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
-              </>
+              </Fragment>
             ) : null
           ))}
         </tbody>

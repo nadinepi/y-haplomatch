@@ -1,4 +1,3 @@
-import logging
 import os
 import re
 import sqlite3
@@ -462,7 +461,6 @@ def suggest_haplogroup_from_user_data(db_path, resolved_haplo, user_alleles, tre
 
 
 def match_by_genotype(db_path, user_haplo, user_alleles, user_labels=None, limit=1000, min_snps=1, tree_version='2016'):
-    logging.basicConfig(filename='match_debug.log', level=logging.DEBUG, format='%(message)s')
     user_labels = user_labels or {}
 
     normalized_alleles = {}

@@ -3,19 +3,38 @@ import ResultsTable from './components/ResultsTable'
 import ResultsMap from './components/ResultsMap'
 import './App.css'
 
+function countVisibleMatches(results) {
+  if (!results) return 0
+
+  return results.filter((row) => {
+    const shared = Array.isArray(row.shared_mutations) ? row.shared_mutations.length : row.snps_matched
+    return shared > 0 && row.snps_compared > 0
+  }).length
+}
+
 function App() {
   const [haplogroup, setHaplogroup] = useState('')
   const [file, setFile] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [data, setData] = useState(null)
-  const [selectedFileName, setSelectedFileName] = useState('')
+  const [selectedResultId, setSelectedResultId] = useState(null)
+  const [mapFocusTick, setMapFocusTick] = useState(0)
+
+  const selectResult = (resultId, focusMap = false) => {
+    setSelectedResultId(resultId)
+    if (focusMap) {
+      setMapFocusTick((tick) => tick + 1)
+    }
+  }
 
   const runMatch = async (nextHaplogroup, nextFile = file) => {
     if (!nextHaplogroup.trim() || !nextFile) return
     setLoading(true)
     setError(null)
     setData(null)
+    setSelectedResultId(null)
+    setMapFocusTick(0)
 
     const formData = new FormData()
     formData.append('haplogroup', nextHaplogroup.trim())
@@ -60,7 +79,6 @@ function App() {
       const demoFile = new File([text], 'demo_i1_user.txt', { type: 'text/plain' })
       setHaplogroup('I1')
       setFile(demoFile)
-      setSelectedFileName('demo_i1_user.txt')
       if (runNow) {
         await runMatch('I1', demoFile)
       }
@@ -95,12 +113,9 @@ function App() {
               type="file"
               accept=".txt,.raw,.csv,.tsv"
               onChange={(e) => {
-                const next = e.target.files[0]
-                setFile(next)
-                setSelectedFileName(next ? next.name : '')
+                setFile(e.target.files[0] || null)
               }}
             />
-            {/* Removed selected file info display */}
           </div>
           <button
             type="submit"
@@ -148,14 +163,7 @@ function App() {
               Y SNPs found from your file: <strong>{data.user_snps_parsed}</strong>
             </div>
             <div className="summary-card">
-              Matches found: <strong>{
-                data.results
-                  ? data.results.filter(r => {
-                      const shared = Array.isArray(r.shared_mutations) ? r.shared_mutations.length : r.snps_matched;
-                      return shared > 0 && r.snps_compared > 0;
-                    }).length
-                  : 0
-              }</strong>
+              Matches found: <strong>{countVisibleMatches(data.results)}</strong>
             </div>
           </div>
 
@@ -175,8 +183,17 @@ function App() {
             </div>
           )}
 
-          <ResultsMap results={data.results} />
-          <ResultsTable results={data.results} />
+          <ResultsMap
+            results={data.results}
+            selectedResultId={selectedResultId}
+            mapFocusTick={mapFocusTick}
+            onSelectResult={(resultId) => selectResult(resultId)}
+          />
+          <ResultsTable
+            results={data.results}
+            selectedResultId={selectedResultId}
+            onSelectResult={(resultId) => selectResult(resultId, true)}
+          />
         </>
       )}
     </div>
