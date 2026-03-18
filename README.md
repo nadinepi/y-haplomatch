@@ -88,9 +88,12 @@ To run the app, the main files you need are:
 
 - `data/ydna.db`
 
+You can download this from:
+https://github.com/nadinepi/y-haplomatch/releases/tag/database
+
 If you are only running the app, you do **not** need the full AADR folder or the raw PLINK files.
 
-If you download `ydna.db` separately, put it here:
+Unzip it and put it in here:
 
 ```text
 data/ydna.db
@@ -142,6 +145,6 @@ This uses the tree files, SNP files, metadata files, and `aadr_chrY.raw` to crea
 
 ## Notes
 
-- The app is designed for local use, not for deployment to a public server.
+- The app is designed for local use, not for deployment to a public server, but it is the future goal.
 - Matching is based on haplogroup-relevant Y SNPs and position-based comparison to ancient individuals.
 - Some user inputs may be resolved using the 2016 reference and some using the 2019 reference, depending on what the app recognizes.
