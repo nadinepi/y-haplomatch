@@ -129,6 +129,24 @@ def build_tree_maps(tree_rows):
     return alias_to_canonical, canonical_tree_rows, haplo_alias_rows
 
 
+def keep_first_tree_rows(tree_rows):
+    # the scraped 2019 tree can repeat some child labels, so keep the first parent we see
+    first_parent = {}
+    for child, parent in tree_rows:
+        if child not in first_parent:
+            first_parent[child] = parent
+    return list(first_parent.items())
+
+
+def keep_first_alias_rows(alias_rows):
+    # keep the first canonical name for each alias
+    first_name = {}
+    for alias_name, canonical_name in alias_rows:
+        if alias_name not in first_name:
+            first_name[alias_name] = canonical_name
+    return list(first_name.items())
+
+
 def normalize_haplogroup(raw, terminal_raw, alias_to_canonical):
     # try to turn noisy text into one 2016 tree node
     for source in (raw, terminal_raw):
@@ -359,6 +377,16 @@ def create_db(db_path):
         canonical_name TEXT
     )''')
 
+    cur.execute('''CREATE TABLE haplogroup_tree_2019 (
+        child TEXT PRIMARY KEY,
+        parent TEXT
+    )''')
+
+    cur.execute('''CREATE TABLE haplogroup_aliases_2019 (
+        alias_name TEXT PRIMARY KEY,
+        canonical_name TEXT
+    )''')
+
     cur.execute('''CREATE TABLE snp_reference (
         snp_name TEXT,
         position INTEGER,
@@ -374,6 +402,8 @@ def create_db(db_path):
     cur.execute('CREATE INDEX idx_ind_haplo ON individuals(y_haplogroup_clean)')
     cur.execute('CREATE INDEX idx_tree_parent ON haplogroup_tree(parent)')
     cur.execute('CREATE INDEX idx_haplo_alias_canon ON haplogroup_aliases(canonical_name)')
+    cur.execute('CREATE INDEX idx_tree_2019_parent ON haplogroup_tree_2019(parent)')
+    cur.execute('CREATE INDEX idx_haplo_alias_2019_canon ON haplogroup_aliases_2019(canonical_name)')
     cur.execute('CREATE INDEX idx_snpref_haplo ON snp_reference(haplogroup)')
     cur.execute('CREATE INDEX idx_snpref_pos ON snp_reference(position)')
     cur.execute('CREATE INDEX idx_snpref_source ON snp_reference(source)')
@@ -403,7 +433,9 @@ def main():
 
     print('Loading 2019 haplogroup tree...')
     raw_tree_rows_2019 = load_haplogroup_tree_from_file(TREE_2019_FILE)
-    alias_to_canonical_2019, _, _ = build_tree_maps(raw_tree_rows_2019)
+    alias_to_canonical_2019, canonical_tree_rows_2019, haplo_alias_rows_2019 = build_tree_maps(raw_tree_rows_2019)
+    canonical_tree_rows_2019 = keep_first_tree_rows(canonical_tree_rows_2019)
+    haplo_alias_rows_2019 = keep_first_alias_rows(haplo_alias_rows_2019)
 
     print('Loading extra SNP reference from the 2019 SNP file...')
     snp_to_haplo_2019, snp_rows_2019, rows_by_pos_2019 = load_2019_snp_reference(alias_to_canonical_2019)
@@ -431,6 +463,8 @@ def main():
     print('Inserting tree and SNP tables...')
     cur.executemany('INSERT INTO haplogroup_tree VALUES (?,?)', canonical_tree_rows)
     cur.executemany('INSERT INTO haplogroup_aliases VALUES (?,?)', haplo_alias_rows)
+    cur.executemany('INSERT INTO haplogroup_tree_2019 VALUES (?,?)', canonical_tree_rows_2019)
+    cur.executemany('INSERT INTO haplogroup_aliases_2019 VALUES (?,?)', haplo_alias_rows_2019)
     cur.executemany('INSERT INTO snp_reference VALUES (?,?,?,?,?,?)', snp_rows)
     conn.commit()
 

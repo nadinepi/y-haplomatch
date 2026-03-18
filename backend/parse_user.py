@@ -65,7 +65,6 @@ def parse_user_file(file_content, db_path):
 
     result = {}
     display_labels = {}
-    log_lines = []
     for line in file_content.splitlines():
         if not line.strip() or line.strip().startswith('#'):
             continue
@@ -109,13 +108,5 @@ def parse_user_file(file_content, db_path):
         if pos not in result:
             result[pos] = allele
             display_labels[pos] = label
-            log_lines.append(f"Accepted Y position {pos} with allele {allele} and label {label}")
-        elif result[pos] != allele:
-            log_lines.append(f"Skipped duplicate Y position {pos} with conflicting allele {allele}")
-
-    # write a small debug log for review
-    with open("user_snp_debug.log", "w") as logf:
-        for line in log_lines:
-            logf.write(line + "\n")
 
     return result, display_labels

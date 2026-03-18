@@ -1,14 +1,8 @@
-import os
 import re
 import sqlite3
 
 
 SNP24_POSITION_RE = re.compile(r'^snp_24_(\d+)(?:_|$)', re.IGNORECASE)
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TREE_2019_FILE = os.path.join(BASE_DIR, '..', 'data', 'AncientYDNA', 'chrY_hGrpTree_isogg2019.txt')
-
-TREE_2019_CACHE = None
-TREE_2019_PARENT_CACHE = None
 
 
 def _split_aliases(text):
@@ -36,11 +30,14 @@ def _normalize_position_key(value):
 
 def _load_tree_data_2016(cur):
     # load the 2016 tree aliases from the database
-    cur.execute("SELECT child, parent FROM haplogroup_tree")
-    tree_rows = cur.fetchall()
-
     alias_to_node = {}
-    for child_raw, parent_raw in tree_rows:
+    cur.execute("SELECT alias_name, canonical_name FROM haplogroup_aliases")
+    for alias_name, canonical_name in cur.fetchall():
+        if alias_name and canonical_name:
+            alias_to_node[alias_name.upper()] = canonical_name
+
+    cur.execute("SELECT child FROM haplogroup_tree")
+    for (child_raw,) in cur.fetchall():
         child_aliases = _split_aliases(child_raw)
         if not child_aliases:
             continue
@@ -66,57 +63,39 @@ def _load_tree_parents_2016(cur):
         parent_by_node[child] = parent
     return parent_by_node
 
-
-def _load_tree_data_2019():
-    # load the scraped 2019 tree from file
-    global TREE_2019_CACHE
-    if TREE_2019_CACHE is not None:
-        return TREE_2019_CACHE
-
+def _load_tree_data_2019(cur):
+    # load the 2019 tree aliases from the database
     alias_to_node = {}
-    with open(TREE_2019_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split('\t')
-            if len(parts) != 2:
-                continue
-            child_aliases = _split_aliases(parts[0])
-            if not child_aliases:
-                continue
-            child = child_aliases[0]
-            for alias in child_aliases:
-                alias_to_node[alias.upper()] = child
+    cur.execute("SELECT alias_name, canonical_name FROM haplogroup_aliases_2019")
+    for alias_name, canonical_name in cur.fetchall():
+        if alias_name and canonical_name:
+            alias_to_node[alias_name.upper()] = canonical_name
 
-    TREE_2019_CACHE = alias_to_node
+    cur.execute("SELECT child FROM haplogroup_tree_2019")
+    for (child_raw,) in cur.fetchall():
+        child_aliases = _split_aliases(child_raw)
+        if not child_aliases:
+            continue
+
+        child = child_aliases[0]
+        for alias in child_aliases:
+            alias_to_node[alias.upper()] = child
+
     return alias_to_node
 
 
-def _load_tree_parents_2019():
+def _load_tree_parents_2019(cur):
     # load canonical parent links for the 2019 tree
-    global TREE_2019_PARENT_CACHE
-    if TREE_2019_PARENT_CACHE is not None:
-        return TREE_2019_PARENT_CACHE
-
+    cur.execute("SELECT child, parent FROM haplogroup_tree_2019")
     parent_by_node = {}
-    with open(TREE_2019_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split('\t')
-            if len(parts) != 2:
-                continue
-            child_aliases = _split_aliases(parts[0])
-            parent_aliases = _split_aliases(parts[1])
-            if not child_aliases:
-                continue
-            child = child_aliases[0]
-            parent = parent_aliases[0] if parent_aliases else None
-            parent_by_node[child] = parent
-
-    TREE_2019_PARENT_CACHE = parent_by_node
+    for child_raw, parent_raw in cur.fetchall():
+        child_aliases = _split_aliases(child_raw)
+        parent_aliases = _split_aliases(parent_raw)
+        if not child_aliases:
+            continue
+        child = child_aliases[0]
+        parent = parent_aliases[0] if parent_aliases else None
+        parent_by_node[child] = parent
     return parent_by_node
 
 
@@ -233,7 +212,7 @@ def _resolve_haplogroup_for_version(cur, user_input, tree_version):
         return None, None, False
 
     if tree_version == '2019':
-        alias_to_node = _load_tree_data_2019()
+        alias_to_node = _load_tree_data_2019(cur)
         cur.execute("SELECT snp_name, haplogroup FROM snp_reference WHERE source = '2019'")
         snp_to_haplo = {name.upper(): haplo for name, haplo in cur.fetchall() if haplo}
     else:
@@ -325,7 +304,7 @@ def _load_relevant_rows_union(cur, branch_root, tree_version):
     seen = set()
 
     alias_2016 = _load_tree_data_2016(cur)
-    alias_2019 = _load_tree_data_2019()
+    alias_2019 = _load_tree_data_2019(cur)
 
     root_2016 = _find_branch_or_ancestor(branch_root, alias_2016)
     root_2019 = _find_branch_or_ancestor(branch_root, alias_2019)
@@ -364,8 +343,8 @@ def suggest_haplogroup_from_user_data(db_path, resolved_haplo, user_alleles, tre
     cur = conn.cursor()
 
     if tree_version == '2019':
-        alias_to_node = _load_tree_data_2019()
-        parent_by_node = _load_tree_parents_2019()
+        alias_to_node = _load_tree_data_2019(cur)
+        parent_by_node = _load_tree_parents_2019(cur)
     else:
         alias_to_node = _load_tree_data_2016(cur)
         parent_by_node = _load_tree_parents_2016(cur)
@@ -480,7 +459,7 @@ def match_by_genotype(db_path, user_haplo, user_alleles, user_labels=None, limit
     cur = conn.cursor()
 
     if tree_version == '2019':
-        alias_to_node = _load_tree_data_2019()
+        alias_to_node = _load_tree_data_2019(cur)
     else:
         alias_to_node = _load_tree_data_2016(cur)
     branch_root = _resolve_tree_name(user_haplo, alias_to_node) or user_haplo
@@ -489,8 +468,6 @@ def match_by_genotype(db_path, user_haplo, user_alleles, user_labels=None, limit
     relevant_rows = _load_relevant_rows_union(cur, branch_root, tree_version)
 
     if not relevant_rows:
-        with open('match_debug.log', 'a') as logf:
-            logf.write(f"No SNPs found for haplogroup {branch_root} in {tree_version}\n")
         conn.close()
         return []
 
@@ -518,8 +495,6 @@ def match_by_genotype(db_path, user_haplo, user_alleles, user_labels=None, limit
             user_label_by_position[pos] = user_labels.get(pos, row['snp_name'])
 
     if not user_value_by_position:
-        with open('match_debug.log', 'a') as logf:
-            logf.write(f"No user SNPs overlap the {tree_version} branch for {branch_root}\n")
         conn.close()
         return []
 
@@ -527,8 +502,6 @@ def match_by_genotype(db_path, user_haplo, user_alleles, user_labels=None, limit
     user_derived_positions = {pos for pos, val in user_value_by_position.items() if val == 2}
     user_derived_total = len(user_derived_positions)
     if user_derived_total == 0:
-        with open('match_debug.log', 'a') as logf:
-            logf.write(f"No user derived SNPs for haplogroup {branch_root} in {tree_version}\n")
         conn.close()
         return []
 
@@ -558,8 +531,6 @@ def match_by_genotype(db_path, user_haplo, user_alleles, user_labels=None, limit
         ind_meta[meta['id']] = meta
 
     if not ind_meta:
-        with open('match_debug.log', 'a') as logf:
-            logf.write(f"No lineage-relevant individuals found for haplogroup {branch_root}\n")
         conn.close()
         return []
 
@@ -626,15 +597,16 @@ def match_by_genotype(db_path, user_haplo, user_alleles, user_labels=None, limit
         })
 
     results.sort(key=lambda r: (r['lineage_rank'], -r['match_score'], -r['snps_compared']))
-    with open('match_debug.log', 'a') as logf:
-        logf.write(f"Returning {len(results)} results for {branch_root} in {tree_version}\n")
     return results[:limit]
 
 
 def match_with_broadening(db_path, user_haplo, user_alleles, user_labels=None, limit=1000, min_snps=1, tree_version='2016'):
     # only broaden if the first exact branch gives no matches
     if tree_version == '2019':
-        alias_to_node = _load_tree_data_2019()
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        alias_to_node = _load_tree_data_2019(cur)
+        conn.close()
     else:
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
@@ -644,7 +616,6 @@ def match_with_broadening(db_path, user_haplo, user_alleles, user_labels=None, l
     haplo = _resolve_tree_name(user_haplo, alias_to_node) or user_haplo
     cap = _major_haplogroup_cap(haplo)
     for attempt in range(20):
-        print(f"[DEBUG] Attempt {attempt}: Trying haplogroup '{haplo}' in {tree_version}")
         results = match_by_genotype(
             db_path,
             haplo,
@@ -654,7 +625,6 @@ def match_with_broadening(db_path, user_haplo, user_alleles, user_labels=None, l
             min_snps=min_snps,
             tree_version=tree_version,
         )
-        print(f"[DEBUG] Results found: {len(results)} for haplogroup '{haplo}'")
         if results:
             return results, haplo, attempt
 

@@ -1,60 +1,147 @@
-# Y HaploMatch
+# Y-HaploMatch
 
-A web app for exploring Y-chromosome SNP matches with ancient DNA samples.
+Y-HaploMatch is a small web app for comparing a user's Y-chromosome SNP file to ancient individuals from the Allen Ancient DNA Resource (AADR).
 
-## Features
-- upload your Y-chromosome genotype file
-- see matches with ancient individuals from the AADR database
-- interactive map and results table
-- filter and explore shared SNPs
+The user enters a Y haplogroup and uploads a genotype file. The app then:
+- finds SNPs relevant to that haplogroup
+- checks which of those SNPs appear in the uploaded file
+- compares them to ancient individuals in the database
+- shows matches in a table and on a map
 
-## Software Stack
-- backend: Flask (Python), SQLite
-- frontend: React, Vite, Leaflet
-- see `backend.sh` and `frontend.sh` for running locally
+This project is meant to be run locally on `localhost`.
 
-## Usage
-1. enter your Y haplogroup and upload your genotype file
-2. click "Find Matches"
-3. view results on the map and in the table
+## What You Need
 
+If you are starting on a new computer, install these first:
 
-## Installation 
+1. `Git`
+2. `Conda` (Miniconda, Anaconda, or Miniforge)
+3. `Node.js` and `npm`
 
-Please download 3 folders:
-- AADR_54.1
-- AncientYDNA
-- TestUsers
+You do not need to rebuild the database just to run the app. The SQLite database is already included.
 
-from:
-https://lunduniversityo365-my.sharepoint.com/:f:/r/personal/er2374el_lu_se/Documents/Students/BINP29%20-%20DNA%20Sequencing%20Informatics%20II/Student%20projects/data?csf=1&web=1&e=MsrxoD
+## Download The Project
 
-And place them into the data/ folder. Please open the AADR Annotations 2025.xlsx and export it to a csv format.
-Unzip files, and delete unneccessary ones until your structure looks like:
+Clone the repo:
 
-├── AADR_54.1
-│   ├── AADR Annotations 2025.csv
-│   ├── Ancient_samples.txt
-│   ├── Modern_samples.txt
-│   ├── v54.1_1240K_public.bed
-│   ├── v54.1_1240K_public.bim
-│   └── v54.1_1240K_public.fam
-├── AncientYDNA
-│   ├── chrY_hGrpTree_isogg2016.txt
-│   ├── chrY_locusFile_b37_isogg2016.txt
-│   └── snpFile_b37_isogg2019.txt
-├── TestUsers
-│   ├── Test1_DNA.txt
-│   ├── Test1.txt
-│   ├── Test2_DNA.csv
-│   ├── Test2.txt
-│   ├── Test3.csv
-│   ├── Test3.txt
-│   ├── Test4_DNA.txt
-│   ├── Test4.txt
-│   ├── Test5_DNA.txt
-│   ├── Test5.txt
+```bash
+git clone https://github.com/nadinepi/y-haplomatch.git
+cd y-haplomatch
+```
 
----
+## Set Up The Backend
 
-> this project is under active development. check back for updates!
+Create the conda environment:
+
+```bash
+conda env create -f environment.yml
+```
+
+Activate it:
+
+```bash
+conda activate popgen
+```
+
+## Set Up The Frontend
+
+Install the frontend packages:
+
+```bash
+npm --prefix frontend install
+```
+
+## Run The App
+
+Start the backend in one terminal:
+
+```bash
+./backend.sh
+```
+
+Start the frontend in another terminal:
+
+```bash
+./frontend.sh
+```
+
+Then open the frontend URL printed in the terminal. It is usually:
+
+```text
+http://localhost:5173
+```
+
+The backend usually starts on port `5174`, but the scripts can choose another free port if needed.
+
+## How To Use It
+
+1. Enter a Y haplogroup, for example `R-M269`
+2. Upload a genotype file (`txt`, `csv`, `tsv`, or `raw`)
+3. Click `Find Matches`
+4. Explore the results in the table and on the map
+
+There is also a built-in demo user button in the app if you want to test it quickly.
+
+## Data Files
+
+To run the app, the main files you need are:
+
+- `data/ydna.db`
+
+If you are only running the app, you do **not** need the full AADR folder or the raw PLINK files.
+
+If you download `ydna.db` separately, put it here:
+
+```text
+data/ydna.db
+```
+
+## Rebuilding The Database (Optional)
+
+Most users do not need to do this.
+
+If you want to rebuild `data/ydna.db`, first download the files from:
+
+[Project files folder](https://lunduniversityo365-my.sharepoint.com/personal/er2374el_lu_se/_layouts/15/onedrive.aspx?id=%2Fpersonal%2Fer2374el_lu_se%2FDocuments%2FStudents%2FBINP29%20-%20DNA%20Sequencing%20Informatics%20II%2FStudent%20projects%2FProjetcFiles&ga=1)
+
+Download these folders:
+
+- `AADR_54.1`
+- `AncientYDNA`
+- `TestUsers`
+
+Then put them inside the `data/` folder.
+
+After that, download and run PLINK on the AADR files so you create the Y chromosome `.raw` file.
+
+Use this PLINK command:
+
+```bash
+plink \
+  --bfile /home/inf-35-2025/BINP29/popgen_project/ProjetcFiles/AADR_54.1/v54.1_1240K_public \
+  --chr 24 \
+  --filter-males \
+  --out /home/inf-35-2025/BINP29/popgen_project/data/plink_out/aadr_chrY \
+  --recode A
+```
+
+This should create a `plink_out` folder inside `data/`, with this file:
+
+```text
+data/plink_out/aadr_chrY.raw
+```
+
+Make sure that file is there. Then run:
+
+```bash
+conda activate popgen
+python scripts/build_profiles.py
+```
+
+This uses the tree files, SNP files, metadata files, and `aadr_chrY.raw` to create a new `data/ydna.db`.
+
+## Notes
+
+- The app is designed for local use, not for deployment to a public server.
+- Matching is based on haplogroup-relevant Y SNPs and position-based comparison to ancient individuals.
+- Some user inputs may be resolved using the 2016 reference and some using the 2019 reference, depending on what the app recognizes.
