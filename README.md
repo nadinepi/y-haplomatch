@@ -96,6 +96,7 @@ The backend usually starts on port `5174`, but the scripts can choose another fr
 There is also a 'Run demo user' button in the app, which will do the above for you in 1 click.
 
 The output should look like:
+![Example output in webapp for haplogroup I1 and demo_I1_DNA.txt](demo_output/demo_output.png)
 
 You can also find this image as demo_output/demo_output.png in the repo.
 
