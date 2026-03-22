@@ -1,0 +1,50 @@
+Hi there!
+
+If you don't want to rebuild the db, you can just download it from:
+https://github.com/nadinepi/y-haplomatch/releases/tag/database
+
+It is ydna.db.zip, unzip it and place it under data/ so you get data/ydna.db
+
+Then you've prepared the data!
+
+If you for some reason want to rebuild the db:
+
+Please download 3 folders:
+- AADR_54.1
+- AncientYDNA
+- TestUsers
+
+from:
+https://lunduniversityo365-my.sharepoint.com/:f:/r/personal/er2374el_lu_se/Documents/Students/BINP29%20-%20DNA%20Sequencing%20Informatics%20II/Student%20projects/data?csf=1&web=1&e=MsrxoD
+
+And place them into the data/ folder. Please open the AADR Annotations 2025.xlsx and export it to a csv format.
+Unzip files, and delete unneccessary ones until your structure looks like:
+
+Also, you will need the file chrY_hGrpTree_isogg2019.txt that I have included in the github releases download here:
+https://github.com/nadinepi/y-haplomatch/releases/tag/database
+
+├── AADR_54.1
+│   ├── AADR Annotations 2025.csv
+│   ├── Ancient_samples.txt
+│   ├── Modern_samples.txt
+│   ├── v54.1_1240K_public.bed
+│   ├── v54.1_1240K_public.bim
+│   └── v54.1_1240K_public.fam
+├── AncientYDNA
+│   ├── chrY_hGrpTree_isogg2016.txt
+│   ├── chrY_locusFile_b37_isogg2016.txt
+│   └── snpFile_b37_isogg2019.txt
+├── TestUsers
+│   ├── Test1_DNA.txt
+│   ├── Test1.txt
+│   ├── Test2_DNA.csv
+│   ├── Test2.txt
+│   ├── Test3.csv
+│   ├── Test3.txt
+│   ├── Test4_DNA.txt
+│   ├── Test4.txt
+│   ├── Test5_DNA.txt
+│   ├── Test5.txt
+
+you can delete me when you are done :)
+The instructions for what to do next are in the main README.md

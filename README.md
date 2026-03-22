@@ -75,12 +75,12 @@ The backend usually starts on port `5174`, but the scripts can choose another fr
 
 ## How To Use It
 
-1. Enter a Y haplogroup, for example `R-M269`
-2. Upload a genotype file (`txt`, `csv`, `tsv`, or `raw`)
+1. Enter a Y haplogroup, for the demo enter `I1`
+2. Upload a genotype file (`txt`, `csv`, `tsv`, or `raw`). The demo user file, Demo_I1_DNA.txt, is provided at data/demo_input/Demo_I1_DNA.txt
 3. Click `Find Matches`
 4. Explore the results in the table and on the map
 
-There is also a built-in demo user button in the app if you want to test it quickly.
+There is also a 'Run demo user' button in the app, which will do the above for you in 1 click.
 
 ## Data Files
 

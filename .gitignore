@@ -35,9 +35,11 @@ Thumbs.db
 *.swp
 *.tmp
 
-data/
-data/*
-!data/placeholder.txt
+data/AADR_54.1/
+data/AncientYDNA/
+data/plink_out/
+data/TestUsers/
+data/ydna.db
 
 .env
 .env.*
