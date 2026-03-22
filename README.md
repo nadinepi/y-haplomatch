@@ -18,8 +18,6 @@ If you are starting on a new computer, install these first:
 2. `Conda` (Miniconda, Anaconda, or Miniforge)
 3. `Node.js` and `npm`
 
-You do not need to rebuild the database just to run the app. The SQLite database is already included.
-
 ## Download The Project
 
 Clone the repo:
@@ -27,6 +25,21 @@ Clone the repo:
 ```bash
 git clone https://github.com/nadinepi/y-haplomatch.git
 cd y-haplomatch
+```
+
+## Data Files
+
+To run the app, the you need to install the following SQLite database file:
+
+- `data/ydna.db`
+
+You can download this from:
+https://github.com/nadinepi/y-haplomatch/releases/tag/database
+
+Unzip it and put it in here:
+
+```text
+data/ydna.db
 ```
 
 ## Set Up The Backend
@@ -76,28 +89,15 @@ The backend usually starts on port `5174`, but the scripts can choose another fr
 ## How To Use It
 
 1. Enter a Y haplogroup, for the demo enter `I1`
-2. Upload a genotype file (`txt`, `csv`, `tsv`, or `raw`). The demo user file, Demo_I1_DNA.txt, is provided at data/demo_input/Demo_I1_DNA.txt
+2. Upload a genotype file (`txt`, `csv`, `tsv`, or `raw`). The demo user file, Demo_I1_DNA.txt, is provided at demo_input/Demo_I1_DNA.txt
 3. Click `Find Matches`
 4. Explore the results in the table and on the map
 
 There is also a 'Run demo user' button in the app, which will do the above for you in 1 click.
 
-## Data Files
+The output should look like:
 
-To run the app, the main files you need are:
-
-- `data/ydna.db`
-
-You can download this from:
-https://github.com/nadinepi/y-haplomatch/releases/tag/database
-
-If you are only running the app, you do **not** need the full AADR folder or the raw PLINK files.
-
-Unzip it and put it in here:
-
-```text
-data/ydna.db
-```
+You can also find this image as demo_output/demo_output.png in the repo.
 
 ## Rebuilding The Database (Optional)
 
